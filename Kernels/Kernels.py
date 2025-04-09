@@ -45,11 +45,15 @@ class Kernel:
     A = abs(self.aC + self.aF)
     mask = A < 1e-10
     plt.imshow(mask, cmap='gray', vmin=0, vmax=1)
-    plt.axis('off')  # Optional: hides axis ticks
+    # plt.axis('off')  # Optional: hides axis ticks
     plt.show()
+
   def plot_b(self):
     self.update_coeffs()
     plt.plot(self.b, 'ks-', markerfacecolor='w')
+
+
+
 ### BOUNDARY CONDITIONS ###
 class BoundaryCondition(Kernel):
   def __init__(self, field, mesh, boundary: str):
@@ -81,7 +85,7 @@ class DirchletBC(BoundaryCondition):
       Sb = self.mesh.cells[cid].lowerArea
 
     dCb = self.mesh.cells[cid].dz / 2.0
-    self.b[cid] = -1.0 * self.Gamma * Sb / dCb * self.phi # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
+    self.b[cid] = 1.0 * self.Gamma * Sb / dCb * self.phi # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
 
   def get_aC(self):
     if self.boundary == 'upper': # upper boundary condition
@@ -97,14 +101,142 @@ class DirchletBC(BoundaryCondition):
 
 ### DIFFERENT KERNELS TO USE ###
 class AdvectionKernel(Kernel):
-  def __init__(self, field, mesh):
+  """
+    Constant velocity advection Kernel.
+  """
+  def __init__(self, field, mesh, w: float, scheme: str, rho: float):
+    """
+    field: scalar field that is being advected.
+    mesh: mesh that we are working on.
+    w: z velocity we are transporting.
+    scheme: which advection scheme to use. (upwind, )
+    rho: fluid density (normally just 1.0 for basic advection)
+    """
     super().__init__(field, mesh)
+    self.w = w
+    self.rho = rho
+    self.scheme = scheme
+    valid_schemes = {'upwind', 'quick'}
+    if self.scheme not in valid_schemes:
+      raise ValueError("Scheme for advection not in allowed list of schemes")
+
+
   def get_aC(self):
-    pass
+    # Reset aC
+    self.aC *= 0.0
+
+    ####### UPWIND SCHEME #######
+    # aC = -(aE + aW) = ||-m_e, 0|| + ||-m_w, 0|| =
+    if self.scheme == 'upwind':
+      for cid in self.mesh.cidList:
+        if self.mesh.cells[cid].upperType == 'f': # if not boundary
+          aU = self.get_aUpperLowerUpwind(cid=cid, upper_or_lower='upper')
+          self.aC[cid,cid] -= aU
+        if self.mesh.cells[cid].lowerType == 'f':
+          aL = self.get_aUpperLowerUpwind(cid=cid, upper_or_lower='lower')
+          self.aC[cid,cid] -= aL
+    #############################
+
+    ######## QUICK SCHEME #######
+    if self.scheme == 'quick':
+      for cid in self.mesh.cidList:
+        mw = self.get_m_values(cid=cid, upper_or_lower='lower')
+        me = self.get_m_values(cid=cid, upper_or_lower='upper')
+        # Get coeffs for this CID
+        aE = -3/4*max(-me, 0) + 3/8 * max(me, 0) - 1/8*max(mw,0)
+        aW = -3/4*max(-mw, 0) + 3/8 * max(mw, 0) - 1/8*max(me,0)
+        aEE = 1/8*max(-me, 0)
+        aWW = 1/8*max(-mw, 0)
+        if self.mesh.cells[cid].upperType == 'f':
+          # subtract upper cell coeff.
+          self.aC[cid,cid] -= aE
+          upperCid = self.mesh.cells[cid].upperNeighborCid
+          if self.mesh.cells[upperCid].upperType == 'f':
+            self.aC[cid,cid] -= aEE
+
+        if self.mesh.cells[cid].lowerType == 'f':
+          # subtract lower cell coeff.
+          self.aC[cid,cid] -= aW
+          lowerCid = self.mesh.cells[cid].lowerNeighborCid
+          if self.mesh.cells[lowerCid].lowerType == 'f':
+            self.aC[cid,cid] -= aWW
+    #############################
+
+
   def get_aF(self):
-    pass
+    self.aF *= 0.0
+    ####### UPWIND SCHEME #######
+    if self.scheme == 'upwind':
+      for cid in self.mesh.cidList:
+        if self.mesh.cells[cid].upperType == 'f': # if not boundary
+          aU = self.get_aUpperLowerUpwind(cid=cid, upper_or_lower='upper')
+          self.aF[cid, cid+1] = aU
+        if self.mesh.cells[cid].lowerType == 'f':
+          aL = self.get_aUpperLowerUpwind(cid=cid, upper_or_lower='lower')
+          self.aF[cid, cid-1] = aL
+    #############################
+
+    ######## QUICK SCHEME #######
+    if self.scheme == 'quick':
+      for cid in self.mesh.cidList:
+        mw = self.get_m_values(cid=cid, upper_or_lower='lower')
+        me = self.get_m_values(cid=cid, upper_or_lower='upper')
+        # Get coeffs for this CID
+        aE = -3/4*max(-me, 0) + 3/8 * max(me, 0) - 1/8*max(mw,0)
+        aW = -3/4*max(-mw, 0) + 3/8 * max(mw, 0) - 1/8*max(me,0)
+        aEE = 1/8*max(-me, 0)
+        aWW = 1/8*max(-mw, 0)
+        if self.mesh.cells[cid].upperType == 'f':
+          # subtract upper cell coeff.
+          self.aC[cid,cid+1] = aE
+          upperCid = self.mesh.cells[cid].upperNeighborCid
+          if self.mesh.cells[upperCid].upperType == 'f':
+            self.aC[cid,cid+2] = aEE
+
+        if self.mesh.cells[cid].lowerType == 'f':
+          # subtract lower cell coeff.
+          self.aC[cid,cid-1] = aW
+          lowerCid = self.mesh.cells[cid].lowerNeighborCid
+          if self.mesh.cells[lowerCid].lowerType == 'f':
+            self.aC[cid,cid-2] = aWW
+    #############################
+
+
   def get_b(self):
     pass
+
+  def get_m_values(self, cid: int, upper_or_lower: str):
+    if upper_or_lower == 'upper':
+      return self.mesh.cells[cid].upperArea * self.w * self.rho # S in positive direction
+    elif upper_or_lower == 'lower':
+      return -1.0 * self.mesh.cells[cid].lowerArea * self.w * self.rho # S in negative direction
+    else:
+      raise Exception("upper or lower must be either upper or lower strings and not anything else!")
+
+  def get_aUpperLowerUpwind(self, cid: int, upper_or_lower: str):
+    """
+    Returns aUpper or aLower for upwind scheme
+    """
+    if upper_or_lower == 'upper':
+      M_upper = self.get_m_values(cid=cid, upper_or_lower='upper')
+      a = -1.0 * max(-1.0*M_upper, 0.0)
+    elif upper_or_lower == 'lower':
+      M_lower = self.get_m_values(cid=cid, upper_or_lower='lower')
+      a = -1.0 * max(-1.0*M_lower, 0.0)
+    else:
+      raise Exception("Must be upper or lower!")
+    return a
+
+  def get_a_QUICK(self, cid: int, upper_or_lower: str):
+    """
+    Gets coeffs for the QUICK scheme.
+      aE = -3/4 * ||-m_e, 0|| + 3/8 * ||m_e, 0|| - 1/8*||m_w, 0||
+      aW = -3/4 * ||-m_w, 0|| + 3/8 * ||m_w, 0|| - 1/8*||m_e, 0||
+      aEE = 1/8*||-m_e, 0||
+      aWW = 1/8*||-m_w, 0||
+    """
+
+
 
 class DiffusionKernel(Kernel):
   def __init__(self, field, mesh, Gamma):
