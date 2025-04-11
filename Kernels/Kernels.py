@@ -5,9 +5,10 @@ import matplotlib.pyplot as plt
 """
 Kernels:
 NOTES:
-(1)    all kernels indexing corresponds to "cids" on the mesh. e.g. index 0 will be cell id 0
+(1)    most kernels indexing corresponds to "cids" on the mesh. e.g. index 0 will be cell id 0
        Otherwise we would need a map that maps indexes in matrices to cell ids which we just arent
        going to deal with in this simple 1D solver.
+(2)    velocity indexing should be stored on faces of the mesh - e.g. faces between cells.
 """
 
 ### KERNEL BASE DEFINITION ###
@@ -54,67 +55,62 @@ class Kernel:
 
 
 
-### BOUNDARY CONDITIONS ###
-class BoundaryCondition(Kernel):
-  def __init__(self, field, mesh, boundary: str):
-    super().__init__(field, mesh)
+### DIFFERENT KERNELS TO USE ###
+class MomentumAdvection(Kernel):
+  """
+    A advection equation -
+    face-stored variables being advected by face-stored velocity as done in momentum equation for velocity term.
+  """
+  def __init__(self, field: FaceField, mesh: Mesh_1D, w: FaceField, scheme: str, rho: float):
+    self.w = w
+    self.field = field
+    self.mesh = mesh
+    self.rho = rho
 
-    # basic checks
-    if (boundary is not 'upper') & (boundary is not 'lower'):
-      raise Exception("Boundary is not upper or lower")
-
-    # assign upper or lower
-    self.boundary = boundary
-
-
-class DirchletBC(BoundaryCondition):
-  def __init__(self, field, mesh, boundary, phi: float, Gamma: float):
-    super().__init__(field, mesh, boundary)
-
-    # assignments
-    self.phi = phi
-    self.Gamma = Gamma
-
-  def get_b(self):
-    if self.boundary == 'upper': # upper boundary condition
-      cid = self.mesh.cidList[-1] # last
-      Sb = self.mesh.cells[cid].upperArea
-
-    if self.boundary == 'lower': # first cell
-      cid = self.mesh.cidList[0]
-      Sb = self.mesh.cells[cid].lowerArea
-
-    dCb = self.mesh.cells[cid].dz / 2.0
-    self.b[cid] = 1.0 * self.Gamma * Sb / dCb * self.phi # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
+    # setup for advection scheme
+    self.scheme = scheme
+    valid_schemes = {'upwind'}
+    if self.scheme not in valid_schemes:
+      raise ValueError("Scheme for advection not in allowed list of schemes")
 
   def get_aC(self):
-    if self.boundary == 'upper': # upper boundary condition
-      cid = self.mesh.cidList[-1] # last
-      Sb = self.mesh.cells[cid].upperArea
-    if self.boundary == 'lower': # first cell
-      cid = self.mesh.cidList[0]
-      Sb = self.mesh.cells[cid].lowerArea
-
-    dCb = self.mesh.cells[cid].dz / 2.0
-    self.aC[cid, cid] = 1.0 * self.Gamma * Sb / dCb # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
+    self.aC *= 0.0
+    ####### UPWIND SCHEME #######
+    if self.scheme == 'upwind':
+      for fid in self.mesh.fidList:
 
 
-### DIFFERENT KERNELS TO USE ###
+
+
+
+
+
+
+
 class AdvectionKernel(Kernel):
   """
-    Constant velocity advection Kernel.
+    Variable velocity advection Kernel - some scalar variable being advected by a velocity FaceField - w.
   """
-  def __init__(self, field, mesh, w: float, scheme: str, rho: float):
+  def __init__(self, field, mesh, w: FaceField, scheme: str, rho: float):
     """
     field: scalar field that is being advected.
     mesh: mesh that we are working on.
     w: z velocity we are transporting.
     scheme: which advection scheme to use. (upwind, )
     rho: fluid density (normally just 1.0 for basic advection)
+
+    Notes:
+      (1) need to make rho a cell-centered field
+      (2) The velocity is stored on the faces.
     """
+    # super
     super().__init__(field, mesh)
+
+    # setup variables and values
     self.w = w
     self.rho = rho
+
+    # setup for advection scheme
     self.scheme = scheme
     valid_schemes = {'upwind', 'quick'}
     if self.scheme not in valid_schemes:
@@ -207,9 +203,9 @@ class AdvectionKernel(Kernel):
 
   def get_m_values(self, cid: int, upper_or_lower: str):
     if upper_or_lower == 'upper':
-      return self.mesh.cells[cid].upperArea * self.w * self.rho # S in positive direction
+      return self.mesh.cells[cid].upperArea * self.w.get_upper(cid=cid) * self.rho # S in positive direction
     elif upper_or_lower == 'lower':
-      return -1.0 * self.mesh.cells[cid].lowerArea * self.w * self.rho # S in negative direction
+      return -1.0 * self.mesh.cells[cid].lowerArea * self.w.get_lower(cid=cid) * self.rho # S in negative direction
     else:
       raise Exception("upper or lower must be either upper or lower strings and not anything else!")
 
@@ -227,19 +223,13 @@ class AdvectionKernel(Kernel):
       raise Exception("Must be upper or lower!")
     return a
 
-  def get_a_QUICK(self, cid: int, upper_or_lower: str):
-    """
-    Gets coeffs for the QUICK scheme.
-      aE = -3/4 * ||-m_e, 0|| + 3/8 * ||m_e, 0|| - 1/8*||m_w, 0||
-      aW = -3/4 * ||-m_w, 0|| + 3/8 * ||m_w, 0|| - 1/8*||m_e, 0||
-      aEE = 1/8*||-m_e, 0||
-      aWW = 1/8*||-m_w, 0||
-    """
+
+
 
 
 
 class DiffusionKernel(Kernel):
-  def __init__(self, field, mesh, Gamma):
+  def __init__(self, field, mesh, Gamma: float):
     super().__init__(field, mesh)
     self.Gamma = Gamma # diffusion coefficient
 
@@ -271,3 +261,78 @@ class DiffusionKernel(Kernel):
   def get_b(self):
     pass ## do nothing for this.
 
+class ExplicitSource(Kernel):
+  """
+  Explicit source. Can input as a constant float, a numpy array, or as a field. If adding as a field,
+  the value of T from the field will be used in an explicit fashion
+  """
+  def __init__(self, field: Field, mesh: Mesh_1D, Q: (np.ndarray, float, Field) ):
+    super().__init__(field, mesh)
+
+    self.Q = np.ones(len(self.b)) # sets Q to all ones
+
+    # if it is just a float --
+    if isinstance(Q, float):
+      self.Q *= Q
+    # if it is a numpy array, just set equal to the reference of that array
+    elif isinstance(Q, np.ndarray):
+      self.Q = Q
+
+    # if it is a field, now set self.Q equal to the field so when we reference it later, self.Q will be Field
+    elif isinstance(Q, Field):
+      self.Q = Q
+    else:
+      raise ValueError("Q type must be np array, float, or a Field for explicit source kernel")
+
+  def get_b(self):
+    self.b *= 0.0
+    if isinstance(self.Q, Field):
+      self.b += self.Q.T # gets value from the field
+    else:
+      self.b += self.Q # else it just adds it like a np array or float array.
+
+
+
+### BOUNDARY CONDITIONS ###
+class BoundaryCondition(Kernel):
+  def __init__(self, field, mesh, boundary: str):
+    super().__init__(field, mesh)
+
+    # basic checks
+    if (boundary is not 'upper') & (boundary is not 'lower'):
+      raise Exception("Boundary is not upper or lower")
+
+    # assign upper or lower
+    self.boundary = boundary
+
+
+class DirchletBC(BoundaryCondition):
+  def __init__(self, field, mesh, boundary, phi: float, Gamma: float):
+    super().__init__(field, mesh, boundary)
+
+    # assignments
+    self.phi = phi
+    self.Gamma = Gamma
+
+  def get_b(self):
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+
+    if self.boundary == 'lower': # first cell
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+
+    dCb = self.mesh.cells[cid].dz / 2.0
+    self.b[cid] = 1.0 * self.Gamma * Sb / dCb * self.phi # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
+
+  def get_aC(self):
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+    if self.boundary == 'lower': # first cell
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+
+    dCb = self.mesh.cells[cid].dz / 2.0
+    self.aC[cid, cid] = 1.0 * self.Gamma * Sb / dCb # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
