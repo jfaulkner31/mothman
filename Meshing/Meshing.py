@@ -1,7 +1,7 @@
 import numpy as np
 
 class Cell:
-  def __init__(self, dz: float, upperZ: float, lowerZ: float, upperType: str, lowerType: str, upperArea: float, lowerArea: float, cid: int):
+  def __init__(self, dz: float, upperZ: float, lowerZ: float, upperType: str, lowerType: str, upperArea: float, lowerArea: float, cid: int, upperFid: int, lowerFid: int):
     self.cid = cid # cell id
     self.upperZ = upperZ # upper face position
     self.lowerZ = lowerZ # lower face position
@@ -14,7 +14,7 @@ class Cell:
     self.dFaceUpper = self.upperZ - self.centroid # absolute distance to upper FACE
     self.dFaceLower = self.centroid - self.lowerZ # absolute distance to lower FACE
 
-    self.dCellUpper = None # absolute distance to lower face
+    self.dCellUpper = None # absolute distance to lower or upper face
     self.dCellLower = None
 
     self.lowerNeighborCid = None # stays at None if no lower neighbor - otherwise is lower neighbor cell id
@@ -25,6 +25,9 @@ class Cell:
 
     self.upperNeighborGdiff = None
     self.lowerNeighborGdiff = None
+
+    self.upperFid=upperFid
+    self.lowerFid=lowerFid
 
 class Mesh_1D:
   """
@@ -43,8 +46,10 @@ class Mesh_1D:
     self.nz = len(self.nodeCoords)-1 # number
     self.cidList = []
     self.centroids = []
+
     # now assign cells and stuff
     cid = int(0)
+    fid = int(0)
     for idx, node in enumerate(self.nodeCoords):
       if idx == 0:
         continue
@@ -64,8 +69,14 @@ class Mesh_1D:
                                upperType=upperType,
                                lowerType=lowerType,
                                upperArea=self.faceAreas[idx],
-                               lowerArea=self.faceAreas[idx-1])
+                               lowerArea=self.faceAreas[idx-1],
+                               upperFid=fid,
+                               lowerFid=fid-1)
         self.cidList.append(cid)
+        self.fidList.append(fid)
+
+
+        fid += 1 # progress fid
         cid += 1 # progress cid
 
     # now we iterate across all cells and define distance to neighbors and neighbor ids

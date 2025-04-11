@@ -65,3 +65,16 @@ class BasicSolver():
       self.A += bc.aF
       self.b += bc.b
     plt.plot(self.b, 'ks--', markerfacecolor='w')
+
+class icoSIMPLE:
+  """
+  A solver for the pressure-momentum equations.
+  """
+  def __init__(self, vel: FaceField, p: Field, mu: float, mesh: Mesh_1D):
+    self.mu = mu
+    self.vel = vel
+    self.p = p
+    self.mesh = mesh
+
+    diff_kernel = DiffusionKernel(field=vel, mesh=mesh, Gamma=self.mu)
+    conv_kernel = AdvectionKernel(field=vel)
