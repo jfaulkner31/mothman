@@ -56,14 +56,13 @@ class Kernel:
 
 
 ### DIFFERENT KERNELS TO USE ###
-class MomentumAdvection(Kernel):
+class MomentumEquation(Kernel):
   """
-    A advection equation -
-    face-stored variables being advected by face-stored velocity as done in momentum equation for velocity term.
+    A advection equation for momentum - equation 15.80 in my textbook.
   """
-  def __init__(self, field: FaceField, mesh: Mesh_1D, w: FaceField, scheme: str, rho: float):
+  def __init__(self, p: Field, mesh: Mesh_1D, w: Field, scheme: str, rho: float, mu: float):
     self.w = w
-    self.field = field
+    self.p = p
     self.mesh = mesh
     self.rho = rho
 
@@ -74,15 +73,24 @@ class MomentumAdvection(Kernel):
       raise ValueError("Scheme for advection not in allowed list of schemes")
 
   def get_aC(self):
-    self.aC *= 0.0
-    ####### UPWIND SCHEME #######
-    if self.scheme == 'upwind':
-      for fid in self.mesh.fidList:
+    # First interpolate velocity field to faces:
+    face_vals = self.w.interpolate_to_faces() # index 0 of vals corresponds to lower face of cell index 0
 
+    # Time term Eq. 15.73
+    flux_CC = 0.0 #
 
+    # Convection + diffusion terms Eq. 15.72
+    flux_Cf =
 
-
-
+    #
+  def get_aF(self):
+    pass
+  def get_b(self):
+    pass
+  def RhieChowInterpolation():
+    """
+      Uses rhie chow interpolation to get face values...
+    """
 
 
 
@@ -224,10 +232,6 @@ class AdvectionKernel(Kernel):
     return a
 
 
-
-
-
-
 class DiffusionKernel(Kernel):
   def __init__(self, field, mesh, Gamma: float):
     super().__init__(field, mesh)
@@ -305,7 +309,6 @@ class BoundaryCondition(Kernel):
     # assign upper or lower
     self.boundary = boundary
 
-
 class DirchletBC(BoundaryCondition):
   def __init__(self, field, mesh, boundary, phi: float, Gamma: float):
     super().__init__(field, mesh, boundary)
@@ -313,6 +316,19 @@ class DirchletBC(BoundaryCondition):
     # assignments
     self.phi = phi
     self.Gamma = Gamma
+
+  def get_face_value(self):
+    """
+      gets value at the associated face to use when computing phi_f
+      used for interpolation - especially with gradients and constructing interpolated face values
+    """
+    return self.phi
+
+  def get_face_gradient(self):
+    """
+      gets gradient value at the face for this boundary - useful for gradient stuffs.
+    """
+    return 0.0
 
   def get_b(self):
     if self.boundary == 'upper': # upper boundary condition
@@ -336,3 +352,23 @@ class DirchletBC(BoundaryCondition):
 
     dCb = self.mesh.cells[cid].dz / 2.0
     self.aC[cid, cid] = 1.0 * self.Gamma * Sb / dCb # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
+
+class InletBC(BoundaryCondition):
+  """
+  Boundary condition for the inlet of the problem.
+  """
+  def __init__(self, field, mesh, boundary: str):
+    super().__init__(field, mesh, boundary)
+  def get_face_gradient(self):
+    pass
+  def get_face_value(self):
+    pass
+  def get_aC(self):
+    pass
+  def get_aF(self):
+    pass
+  def get_b(self):
+    pass
+
+
+
