@@ -199,3 +199,5 @@ class FaceField:
     self.T[cid] = value
   def set_upper(self, cid: int, value: float):
     self.T[cid+1] = value
+  def update_all(self, new: np.ndarray):
+    self.T = np.deepcopy(new)
