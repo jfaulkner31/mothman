@@ -60,37 +60,95 @@ class MomentumEquation(Kernel):
   """
     A advection equation for momentum - equation 15.80 in my textbook.
   """
-  def __init__(self, p: Field, mesh: Mesh_1D, w: Field, scheme: str, rho: float, mu: float):
-    self.w = w
+  def __init__(self, p: Field, mesh: Mesh_1D, w: Field, scheme: str, rho: float, mu: float,
+               upper_w_bc, lower_w_bc):
+
+    # setup of variables
+    self.w = w # cell centered field
     self.p = p
     self.mesh = mesh
     self.rho = rho
 
+    # setup of upper and lower boundary conditions
+    self.upper_w_bc = upper_w_bc
+    self.lower_w_bc = lower_w_bc
+
     # setup for advection scheme
     self.scheme = scheme
-    valid_schemes = {'upwind'}
+    valid_schemes = {'upwind', 'quick'}
     if self.scheme not in valid_schemes:
       raise ValueError("Scheme for advection not in allowed list of schemes")
 
+    """
+    Now perform setup of kernels to use in MomentumEquation.
+      Diffusion treated normally where we just add a diffusion kernel
+      Advection treated by just adding an advection kernel to it.
+    """
+
+    # Advection Kernel:
+    w_interpd_to_faces = self.w.interpolate_to_faces()
+    self.w_faces = FaceField(name='w_face_MomEq', initial_value=w_interpd_to_faces, mesh=self.mesh)
+    self.adv_kernel = AdvectionKernel(field=self.w, w=self.w_faces, scheme=self.scheme, rho=self.rho)
+
+    # Diffusion Kernel:
+    self.diff_kernel = DiffusionKernel(field=self.w, mesh=self.mesh, Gamma=self.mu)
+
   def get_aC(self):
-    # First interpolate velocity field to faces:
-    face_vals = self.w.interpolate_to_faces() # index 0 of vals corresponds to lower face of cell index 0
 
-    # Time term Eq. 15.73
-    flux_CC = 0.0 #
+    # Reset aC
+    self.aC *= 0.0
 
-    # Convection + diffusion terms Eq. 15.72
-    flux_Cf =
+    # First interpolate velocity field to faces and update the face field values with it.
+    updated_w_faces = self.w.interpolate_to_faces()
+    self.w_faces.update_all(new=updated_w_faces)
 
-    #
+    # Now add to our aC - First update coeffs and then add them to this aC
+    self.adv_kernel.get_aC()
+    self.diff_kernel.get_aC()
+    self.aC += self.adv_kernel.aC
+    self.aC += self.diff_kernel.aC
+
+    # Now add time term: TODO
+    # for cid in self.mesh.cidList:
+      # fluxCC = self.rho * self.mesh.cells[cid].vol / _dt
+
+
   def get_aF(self):
-    pass
+
+    # Reset aF
+    self.aF *= 0.0
+
+    # Update velocities at faces
+    updated_w_faces = self.w.interpolate_to_faces(upper_bc = self.upper_w_bc, lower_bc=self.lower_w_bc)
+    self.w_faces.update_all(new=updated_w_faces)
+
+    # Now update aF for each kernel
+    self.adv_kernel.get_aF()
+    self.diff_kernel.get_aF()
+
+    # Now add
+    self.aF += self.adv_kernel.aF
+    self.aF += self.diff_kernel.aF
+
   def get_b(self):
-    pass
+    self.b *= 0.0
+
+    # Dummy terms
+    fluxVf = 0.0 # Tf is in the orthogonal direction which just doesnt exist in 1D
+    fluxVc = 0.0 # time term not yet added here.
+
+    # Pressure gradient terms -1.0*(grad_P)_C * V_C
+
+
+    # friction term - mu_f * (grad v)_f^transpose dot sF
+
+
+
   def RhieChowInterpolation():
     """
       Uses rhie chow interpolation to get face values...
     """
+    pass
 
 
 
@@ -353,12 +411,28 @@ class DirchletBC(BoundaryCondition):
     dCb = self.mesh.cells[cid].dz / 2.0
     self.aC[cid, cid] = 1.0 * self.Gamma * Sb / dCb # b = -FluxVb where fluxVb = -Gamma_b * gDiff_b = -Gamma_b * S_b / dCb
 
-class InletBC(BoundaryCondition):
+class IncompressibleFlowInletVelocityBC(BoundaryCondition):
   """
-  Boundary condition for the inlet of the problem.
+  Boundary condition for the momentum equation 15.70. Handles inlets.
+  Use with MomentumEquation Kernels to specify the inlet.
+  See Section 15.6.1.2
+  P_b ?; m_b specified; v_b specified
   """
-  def __init__(self, field, mesh, boundary: str):
+  def __init__(self, field, mesh, boundary: str, inlet_w: float, inlet_rho: float, inlet_mu: float):
     super().__init__(field, mesh, boundary)
+
+    # set inlet values of rho and velocity for the bc
+    self.inlet_w = inlet_w
+    self.inlet_rho = inlet_rho
+    self.inlet_mu = inlet_mu
+
+    # check if inlet_w is allowed (if error then likely just a sign error and the flow
+    # direction needs to simply be reversed)
+    if self.inlet_w > 0 & boundary == 'upper':
+      raise Exception("Velocity is being defined as the outflow rather than the inflow - possible a sign error on inlet_w")
+    if self.inlet_w < 0 & boundary == 'lower':
+      raise Exception("Velocity is being defined as the outflow rather than the inflow - possible a sign error on inlet_w")
+
   def get_face_gradient(self):
     pass
   def get_face_value(self):
@@ -368,7 +442,22 @@ class InletBC(BoundaryCondition):
   def get_aF(self):
     pass
   def get_b(self):
-    pass
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+
+    if self.boundary == 'lower': # lower bc (first cell face)
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+
+    dCb = self.mesh.cells[cid].dz / 2.0
+
+    # get aF for momentum and diffusion
+                # Momentum                         Diffusion
+    aF_b = -1.0*max(-1.0*self.inlet_w, 0.0) - self.inlet_mu * Sb / dCb
+    self.b[cid] -= self.inlet_w * aF_b
+
+
 
 
 
