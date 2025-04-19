@@ -108,7 +108,7 @@ class MomentumEquation(Kernel):
     self.aC += self.adv_kernel.aC
     self.aC += self.diff_kernel.aC
 
-    # Now add time term: TODO
+    # Now add time dependent term?
     # for cid in self.mesh.cidList:
       # fluxCC = self.rho * self.mesh.cells[cid].vol / _dt
 
