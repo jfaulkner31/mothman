@@ -457,6 +457,80 @@ class IncompressibleFlowInletVelocityBC(BoundaryCondition):
     aF_b = -1.0*max(-1.0*self.inlet_w, 0.0) - self.inlet_mu * Sb / dCb
     self.b[cid] -= self.inlet_w * aF_b
 
+class IncompressibleFlowOutletPressureMomentumBC(BoundaryCondition):
+  def __init__(self, field, mesh, boundary: str, outlet_static_p: float, outlet_rho: float):
+    super().__init__(field, mesh, boundary)
+
+    #  incompressible flow specified static pressure bc for velocity
+    #  assumes outlet pressure is knwon - m_b and v_b are unknowns
+    #  velocity gradient along direction of the surface vector at outlet is 0
+
+    # note: outlet
+    self.outlet_static_p = outlet_static_p # outlet mass flow rate (assumed to be known)
+    self.outlet_rho = outlet_rho
+  def get_face_gradient(self):
+    pass
+  def get_face_value(self):
+    pass
+  def get_aC(self):
+    # aC <---- a_C(interior faces) + m_b (boundary face)
+    # so we need to compute or set m_b based on values of field....
+
+    # zero aC
+    self.aC *= 0.0
+
+    # get interp'd values of velocity
+    vals = self.field.interpolate_to_faces()
+
+    # now for upper or lower
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      face_index = -1
+      Sb = self.mesh.cells[cid].upperArea
+      mult = 1.0 # upwards surface vec (positive)
+
+    # for lower
+    if self.boundary == 'lower': # lower bc (first cell face)
+      cid = self.mesh.cidList[0]
+      face_index = 0
+      Sb = self.mesh.cells[cid].lowerArea
+      mult = -1.0 # downwards surface vec (negative)
+    else:
+      raise Exception("Boundary type must be upper or lower!")
+
+    self.aC[cid,cid] = self.outlet_rho * Sb * vals[face_index]
+
+    pass
+  def get_b(self):
+    # b_C <--- b_C - m_b * (grad_v dot d_Cb) - p_b * S_b
+    # but since this is 1D I thinkk that grad v_b is 0.0 (see 15.139)
+    # so b_C <--- b_C - p_b*S_b
+
+    # zero b
+    self.b *= 0.0
+
+    # for upper
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+      mult = 1.0 # upwards surface vec (positive)
+
+    # for lower
+    if self.boundary == 'lower': # lower bc (first cell face)
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+      mult = -1.0 # downwards surface vec (negative)
+    else:
+      raise Exception("Boundary type must be upper or lower!")
+
+    # set b
+    self.b[cid] = -self.outlet_static_p * Sb * mult
+
+  def get_aF(self):
+    # a_F=b -> 0.0 # do nothing approach for boundary faces
+    pass
+
+
 
 
 
