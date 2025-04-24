@@ -32,6 +32,7 @@ class ScalarField(Field):
 
     # Assigns T as initial values based on deepcopy
     self.T = copy.deepcopy(self.initial_value)
+    self.T_old = copy.deepcopy(self.initial_value)
 
     # Gradient stuff:
 
