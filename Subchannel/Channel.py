@@ -2,6 +2,8 @@ import numpy as np
 from .FluidRelation import FluidRelation
 from Meshing.Meshing import *
 from Fields.Fields import *
+from Kernels.Kernels import *
+from Solvers.Solvers import *
 
 class Channel:
   def __init__(self, gravity: float,
@@ -80,6 +82,39 @@ class Channel:
     # Channel face field handling -> FaceField for velocity essentially.
     self.velocity_faces = FaceField(name='vel', initial_value=0.0 , mesh=self.mesh) # nZones + 1
 
+    # Channel Tracers
+    self.tracers = {}
+    self.tracer_kernels = {}
+    self.tracer_bcs = {}
+
+
+  def add_tracer_to_channel(self, name: str,
+                 initial_value: np.ndarray | float,
+                 scheme: str,
+                 decay_const: float,
+                 boundary: str,
+                 phi: float,
+                 rho: float,
+                 source: float | np.ndarray):
+    """
+    Adds a tracer to the channel - advection + decay + source
+    """
+    # Add a tracer object
+    self.tracers[name] = ScalarField(name=name, initial_value=initial_value, mesh=self.mesh)
+
+    # Add kernels to the tracer:
+    self.tracer_kernels[name] = [AdvectionKernel(field=self.tracers[name], mesh=self.mesh, w=self.velocity_faces, scheme=scheme, rho=rho),
+                                 ImplicitReactionKernel(field=self.tracers[name], mesh=self.mesh, lam=decay_const)]
+
+    # Add BC's to the tracer:
+    self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
+
+  def solve_tracer(self, name: str):
+    """
+    Solves tracer equations.
+    """
+    solver = BasicSolver(kernels=self.tracer_kernels[name], bcs=self.tracer_bcs[name], field=self.tracers[name])
+    solver.solve()
 
 
   def mdot_to_velocities(self):
@@ -149,15 +184,19 @@ class Channel:
       raise Exception("Friction factor type unknown!")
 
   # UPDATE BOUNDARY CONDITIONS
-  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float):
+  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict):
     """
     Sets boundary conditions for the pressure, temperature, and mdot.
     """
+    # TH BOUNDARY CONDITIONS
     self.pressure_bc = pressure_bc
     self.T_bc = T_bc
     self.mdot_bc = mdot_bc
     self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
     self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
+
+    # TRACER BOUNDARY CONDITIONS
+    self.tracer_bcs = tracer_name_value_pairs
 
   # MASS EQUATION
   def solve_mass_equation(self, _dt: float):
