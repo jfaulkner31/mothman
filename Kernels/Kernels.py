@@ -328,7 +328,7 @@ class ExplicitSource(Kernel):
   Explicit source. Can input as a constant float, a numpy array, or as a field. If adding as a field,
   the value of T from the field will be used in an explicit fashion
   """
-  def __init__(self, field: Field, mesh: Mesh_1D, Q: (np.ndarray, float, Field) ):
+  def __init__(self, field: Field, mesh: Mesh_1D, Q: np.ndarray | float | Field ):
     super().__init__(field, mesh)
 
     self.Q = np.ones(len(self.b)) # sets Q to all ones
@@ -353,7 +353,23 @@ class ExplicitSource(Kernel):
     else:
       self.b += self.Q # else it just adds it like a np array or float array.
 
+class ImplicitReactionKernel(Kernel):
+  """
+  Implicit Reaction Source term: lambda * PHI
+  """
+  def __init__(self, field: ScalarField, mesh: Mesh_1D, lam: float):
+    super().__init__(field, mesh)
+    self.lam = lam
 
+  def get_aC(self):
+    self.aC *= 0.0
+    for cid in self.mesh.cidList:
+      self.aC[cid,cid] = self.lam * self.mesh.cells[cid].vol
+
+  def get_aF(self):
+    pass
+  def get_b(self):
+    pass
 
 ### BOUNDARY CONDITIONS ###
 class BoundaryCondition(Kernel):
@@ -366,6 +382,46 @@ class BoundaryCondition(Kernel):
 
     # assign upper or lower
     self.boundary = boundary
+
+class AdvectedInletFluxBC(Kernel):
+  def __init__(self, field: ScalarField, mesh: Mesh_1D, phi: float, w: FaceField, boundary: str, rho: float):
+    super().__init__(field, mesh)
+    self.phi = phi
+    self.w = w
+    self.boundary = boundary
+    self.rho = rho
+  def get_b(self):
+    self.b *= 0.0
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+      vel = self.w.T[-1]
+
+    if self.boundary == 'lower': # first cell
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+      vel = self.w.T[0]
+
+    dCb = self.mesh.cells[cid].dz / 2.0
+    self.b[cid] = 1.0*vel*self.phi*Sb*self.rho
+
+  def get_aC(self):
+    self.aC *= 0.0
+    if self.boundary == 'upper': # upper boundary condition
+      cid = self.mesh.cidList[-1] # last
+      Sb = self.mesh.cells[cid].upperArea
+      vel = self.w.T[-1]
+
+    if self.boundary == 'lower': # first cell
+      cid = self.mesh.cidList[0]
+      Sb = self.mesh.cells[cid].lowerArea
+      vel = self.w.T[0]
+
+    dCb = self.mesh.cells[cid].dz / 2.0
+
+    self.aC[cid,cid] = vel*Sb*self.rho
+  def get_aF(self):
+    pass
 
 class DirchletBC(BoundaryCondition):
   def __init__(self, field, mesh, boundary, phi: float, Gamma: float):
