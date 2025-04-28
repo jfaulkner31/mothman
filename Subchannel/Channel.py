@@ -17,7 +17,7 @@ class Channel:
                T_bc: float,
                mdot_bc: float,
                fric: str,
-               heat_source: list):
+               heat_source: list | float):
     # Initial data that remains constant for this channel during the simulation.
     self.gravity = gravity
     self.Dh = Dh
@@ -29,11 +29,11 @@ class Channel:
     self.L1 = L1
     self.fluid = fluid
     self.fric = fric
-    self.heat_source = heat_source
+    self.set_heat_source(nZones=nZones, heat_source=heat_source)
 
     # Make a mesh
-    coords = np.linspace(L0,L1,nZones)
-    areas = [area]*nZones
+    coords = np.linspace(L0,L1,self.nZones+1)
+    areas = [area]*(self.nZones+1)
     self.mesh = Mesh_1D(nodeCoords=coords, faceAreas=
                         areas)
 
@@ -47,6 +47,13 @@ class Channel:
     self.rho = ScalarField(name='density', initial_value=self.rho_bc, mesh=self.mesh)
     self.temp = ScalarField(name='temp', initial_value=self.T_bc, mesh=self.mesh)
 
+    # Make a dictionary for those variables.
+    self.pressure_dict = {}
+    self.mdot_dict = {}
+    self.h_dict = {}
+    self.rho_dict = {}
+    self.temp_dict = {}
+
     # Make some matrices and vectors
     self.A_mass = np.zeros([self.mesh.nz, self.mesh.nz])
     self.A_energy = np.zeros([self.mesh.nz, self.mesh.nz])
@@ -55,7 +62,10 @@ class Channel:
     self.b_energy = np.zeros([self.mesh.nz])
     self.b_momentum = np.zeros([self.mesh.nz])
 
-    # Channel conditions dictionary:
+    self.A_pressure_mass = np.zeros([self.mesh.nz*2, self.mesh.nz*2])
+    self.b_pressure_mass = np.zeros([self.mesh.nz*2])
+
+    # Channel conditions dictionary for passing data between channels
     self.channel_conditions = {}
     self.channel_conditions['dP'] = None
     self.channel_conditions['P_out'] = None
@@ -67,6 +77,63 @@ class Channel:
     self.channel_conditions['T_in'] = None
     self.channel_conditions['T_out'] = None
 
+    # Channel face field handling -> FaceField for velocity essentially.
+    self.velocity_faces = FaceField(name='vel', initial_value=0.0 , mesh=self.mesh) # nZones + 1
+
+
+
+  def mdot_to_velocities(self):
+    """
+    Def. that passes takes current values of mdot and updates velocity faces field
+    """
+    # Assume inlet bc is known - face 0
+    # Assume zero gradient at outlet - face -1
+    self.velocity_faces.T[0] = self.mdot_bc / self.rho_bc / self.area
+    for cid in self.mesh.cidList:
+      if cid == 0:
+        continue
+      else:
+        gC = self.mesh.cells[cid-1].geoUpper
+        mdot_interp = self.mdot.T[cid-1] * gC + (1.0-gC)*self.mdot.T[cid]
+        rho_interp = self.rho.T[cid-1] * gC + (1.0-gC)*self.rho.T[cid]
+        face_area = self.area
+        vel_f = mdot_interp/rho_interp/face_area
+        self.velocity_faces.T[cid] = vel_f
+    mdot_last = self.mdot.T[-1]
+    rho_last = self.rho.T[-1]
+    area_last = self.area
+    self.velocity_faces.T[-1] = mdot_last/rho_last/area_last
+
+  def update_old_to_most_recent(self):
+    """
+    Updates old -> new
+    """
+    self.pressure.T_old = copy.deepcopy(self.pressure.T)
+    self.mdot.T_old = copy.deepcopy(self.mdot.T)
+    self.h.T_old = copy.deepcopy(self.h.T)
+    self.rho.T_old = copy.deepcopy(self.rho.T)
+    self.temp.T_old = copy.deepcopy(self.temp.T)
+
+  def save_data(self, _t: float):
+    """
+    Stores data for the next timestep - called externally.
+    """
+
+    # Saves data
+    self.pressure_dict[_t] = copy.deepcopy(self.pressure.T)
+    self.mdot_dict[_t] = copy.deepcopy(self.mdot.T)
+    self.h_dict[_t] = copy.deepcopy(self.h.T)
+    self.rho_dict[_t] = copy.deepcopy(self.rho.T)
+    self.temp_dict[_t] = copy.deepcopy(self.temp.T)
+
+  def set_heat_source(self, heat_source: float | list, nZones: int):
+    # Quick function for setting heat source.
+    if isinstance(heat_source, float):
+      self.heat_source = [heat_source]*nZones # float
+    else:
+      self.heat_source = heat_source # if heat source is a list
+
+  # FRICTION FACTOR CORRELATIONS
   def get_friction_factor(self, Reynolds: float):
     # Friction  factors for a channel from the thesis Luzzi et al., 2010
     if self.fric == 'type1':
@@ -74,10 +141,14 @@ class Channel:
         return 0.3164 / Reynolds**0.25 * (1.0 + Reynolds/4.31e5)**(1.0/8.0)
       elif Reynolds <= 3000:
         return 64.0 / Reynolds
+  # CASE OF NO FRICTION FACTOR CORRELATIONS
+    if self.fric == 'none':
+      return 0.0
     # Unknown!
     else:
       raise Exception("Friction factor type unknown!")
 
+  # UPDATE BOUNDARY CONDITIONS
   def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float):
     """
     Sets boundary conditions for the pressure, temperature, and mdot.
@@ -115,18 +186,25 @@ class Channel:
 
   # ENERGY EQUATION
   def solve_energy_equation(self, _dt: float):
-    mesh = self.mesh
-    self.A_energy *= 0.0
-    self.b_energy *= 0.0
     """
     ENERGY EQUATION AND SETUP
     """
+    mesh = self.mesh
+    self.A_energy *= 0.0
+    self.b_energy *= 0.0
+
     for cid in mesh.cidList:
       # Geometry stuff
       area = ( mesh.cells[cid].upperArea + mesh.cells[cid].lowerArea ) / 2.0
       dz = mesh.cells[cid].dz
       # main diagonal
-      self.A_energy[cid,cid] = area/_dt * (self.rho.T[cid] - self.rho.T_old[cid]) + 1.0/dz * self.mdot.T[cid]
+      self.A_energy[cid,cid] = area/_dt * self.rho.T[cid] + 1.0/dz * self.mdot.T[cid]
+
+      # Source term (heat source in W/m3 --> times Volume ---> divided by dz ---> = linear heat rate)
+      self.b_energy[cid] += self.heat_source[cid] * area*dz / dz
+
+      # Time term for source
+      self.b_energy[cid] += area/_dt * self.h.T_old[cid] * self.rho.T_old[cid]
 
       # off diagonal coeff for enthalpy
       if cid == 0:
@@ -170,7 +248,7 @@ class Channel:
             dz / _dt * (self.mdot.T[cid] - self.mdot.T_old[cid]) )
     self.pressure.T = np.linalg.solve(self.A_momentum, self.b_momentum)
 
-  # EOS FOR TEMPERATURE AND DENSITY
+  # EQUATION OF STATE FOR TEMPERATURE AND DENSITY
   def solve_EOS(self):
     # New temp and density arrays
     temp_updated = np.array([])
@@ -197,8 +275,8 @@ class Channel:
     self.channel_conditions['T_out'] = self.temp.T[-1]
     self.channel_conditions['T_in'] = self.T_bc
 
-  # SOLVING LOOP
-  def solve_channel(self, _dt: float):
+  # THERMAL HYDRAULICS SOLVING LOOP
+  def solve_channel_TH(self, _dt: float):
     # Start loop
     iteration_num = 0
     max_diff = 1e10
@@ -215,8 +293,20 @@ class Channel:
       self.solve_pressure_equation(_dt=_dt) # solves and updates pressures
       max_diff = self.solve_EOS() # solves and updates temperature and density - returns maximum temp diff.
 
+    # Print?
+    print("Channel solved after", iteration_num, "iterations!")
+
     # After we solve we update our channel conditions for later reference:
     self.update_channel_conditions()
+
+    # Now update velocity face-fields from mdot and density solution
+    self.mdot_to_velocities()
+
+  # TRACER SOLVING LOOP
+  def solve_channel_tracer(self, _dt: float):
+    pass
+
+
 
 class ChannelArray:
   """
@@ -288,19 +378,19 @@ class ChannelInterface:
     # Channels
     self.ch1 = ch1
     self.ch2 = ch2
-  def handle_interface(self):
+  def update_interface_conditions(self):
 
     # Channel to channel scenario
     if isinstance(self.ch1, Channel) & isinstance(self.ch2, Channel):
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_in'], mdot_bc=cond1['mdot_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'])
 
     # Channel to channel array scenario
     elif isinstance(self.ch1, Channel) & isinstance(self.ch2, ChannelArray):
       # This means that Channel1 passes data to ChannelArray2
       # E.g. the case of lower plenum to core subchannels.
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_in'], mdot_bc=cond1['mdot_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'])
 
     # Channel array to channel scenario
     elif isinstance(self.ch1, ChannelArray) & isinstance(self.ch2, ChannelArray):
@@ -308,3 +398,4 @@ class ChannelInterface:
       self.ch2.set_bcs(pressure_bc=outlet_P, T_bc=outlet_T, mdot_bc=mdot_sum)
     else:
       raise Exception("Unknown interface type")
+

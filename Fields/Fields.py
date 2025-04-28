@@ -14,7 +14,7 @@ class ScalarField(Field):
   """
   Cell centered field at the element centroid - represented by .T
   """
-  def __init__(self, name: str, initial_value: (np.ndarray, float), mesh: Mesh_1D):
+  def __init__(self, name: str, initial_value: np.ndarray | float, mesh: Mesh_1D):
     #################################################
     # super from Field class
     super().__init__(initial_value=initial_value, name=name, mesh=mesh,)
@@ -165,7 +165,7 @@ class FaceField:
   """
     A field where values are stored on the faces.
   """
-  def __init__(self, name: str, initial_value: (np.ndarray, float), mesh: Mesh_1D):
+  def __init__(self, name: str, initial_value: np.ndarray | float, mesh: Mesh_1D):
     self.name = name
     self.mesh = mesh
     self.centroids = self.mesh.centroids

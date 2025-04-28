@@ -14,6 +14,8 @@ class Cell:
     self.dFaceUpper = self.upperZ - self.centroid # absolute distance to upper FACE
     self.dFaceLower = self.centroid - self.lowerZ # absolute distance to lower FACE
 
+    self.vol = self.dz * (self.lowerArea + self.upperArea)/2.0
+
     self.dCellUpper = None # absolute distance to lower or upper face
     self.dCellLower = None
 
