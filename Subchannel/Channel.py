@@ -40,7 +40,7 @@ class Channel:
                         areas)
 
     # Set boundary conditions
-    self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc)
+    self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={})
 
     # Make some variables
     self.pressure = ScalarField(name='P', initial_value=self.pressure_bc, mesh=self.mesh)
@@ -79,15 +79,21 @@ class Channel:
     self.channel_conditions['T_in'] = None
     self.channel_conditions['T_out'] = None
 
+
     # Channel face field handling -> FaceField for velocity essentially.
     self.velocity_faces = FaceField(name='vel', initial_value=0.0 , mesh=self.mesh) # nZones + 1
 
-    # Channel Tracers
-    self.tracers = {}
-    self.tracer_kernels = {}
-    self.tracer_bcs = {}
+    # Channel Tracers -> keys are tracer names
+    self.tracers = {} # Field variable for tracers
+    self.tracer_kernels = {} # actual kernel objects for tracers
+    self.tracer_bcs = {} # actual BC objects for tracers
+    self.tracer_bc_values = {} # name and value pairs for tracers [name] -> inlet bc value for this channel
+    self.channel_conditions['tracers_in'] = {} # {} -> name and value pairs for inlet values and outlet values
+    self.channel_conditions['tracers_out'] = {} #
+    self.tracer_dict = {} # time dependent tracer dict -> tracer_dict[tracer_name][_t] -> vector of values for this tracer
 
 
+  # SETUP A TRACER FOR THIS CHANNEL OBJECT
   def add_tracer_to_channel(self, name: str,
                  initial_value: np.ndarray | float,
                  scheme: str,
@@ -99,6 +105,11 @@ class Channel:
     """
     Adds a tracer to the channel - advection + decay + source
     """
+
+    # Raise Exception (only 1 way advection supported currently since I am lazy and it really doesnt matter for 1D)
+    if boundary != 'lower':
+      raise Exception("Only lower boundary conditions supported (inlet at bottom and zero gradient outlet at top!)")
+
     # Add a tracer object
     self.tracers[name] = ScalarField(name=name, initial_value=initial_value, mesh=self.mesh)
 
@@ -109,14 +120,26 @@ class Channel:
     # Add BC's to the tracer:
     self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
 
-  def solve_tracer(self, name: str):
+  # SOLUTION FOR CHANNEL TRACER
+  def solve_tracer(self, name: str, _dt: float):
     """
     Solves tracer equations.
     """
+    # Setup basic solver
     solver = BasicSolver(kernels=self.tracer_kernels[name], bcs=self.tracer_bcs[name], field=self.tracers[name])
+
+    # Solve
     solver.solve()
 
+    # Update channel conditions dictionary at the inlet and outlet.
+    self.channel_conditions['tracers_in'][name] = self.tracer_bcs[name].phi # inlet value from BC
+    self.channel_conditions['tracers_out'][name] = self.tracers[name].T[-1] # outlet value using zero gradient at the outlet
 
+  def solve_all_tracers(self, _dt: float):
+    for tracer_name in self.tracers.keys():
+      self.solve_tracer(name=tracer_name, _dt=_dt)
+
+  # CONVERT MASS FLOW RATES TO VELOCITY FACEFIELD
   def mdot_to_velocities(self):
     """
     Def. that passes takes current values of mdot and updates velocity faces field
@@ -139,16 +162,23 @@ class Channel:
     area_last = self.area
     self.velocity_faces.T[-1] = mdot_last/rho_last/area_last
 
+  # UPDATE OLD VARIABLE TO NEW VALUE
   def update_old_to_most_recent(self):
     """
     Updates old -> new
     """
+    # THERMAL HYDRAULIC VARIABLES
     self.pressure.T_old = copy.deepcopy(self.pressure.T)
     self.mdot.T_old = copy.deepcopy(self.mdot.T)
     self.h.T_old = copy.deepcopy(self.h.T)
     self.rho.T_old = copy.deepcopy(self.rho.T)
     self.temp.T_old = copy.deepcopy(self.temp.T)
 
+    # TRACER VARIABLES
+    for name in self.tracers.keys():
+      self.tracers[name].T_old = copy.deepcopy(self.tracers[name].T)
+
+  # SAVES DEEPCOPY OF DATA FOR STORAGE/USE LATER
   def save_data(self, _t: float):
     """
     Stores data for the next timestep - called externally.
@@ -161,6 +191,11 @@ class Channel:
     self.rho_dict[_t] = copy.deepcopy(self.rho.T)
     self.temp_dict[_t] = copy.deepcopy(self.temp.T)
 
+    # Saves data for tracers
+    for name in self.tracers.keys():
+      self.tracer_dict[name][_t] = copy.deepcopy(self.tracers[name].T)
+
+  # SETS HEAT SOURCE
   def set_heat_source(self, heat_source: float | list, nZones: int):
     # Quick function for setting heat source.
     if isinstance(heat_source, float):
@@ -183,7 +218,7 @@ class Channel:
     else:
       raise Exception("Friction factor type unknown!")
 
-  # UPDATE BOUNDARY CONDITIONS
+  # UPDATE OR SET BOUNDARY CONDITIONS
   def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict):
     """
     Sets boundary conditions for the pressure, temperature, and mdot.
@@ -195,8 +230,10 @@ class Channel:
     self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
     self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
 
-    # TRACER BOUNDARY CONDITIONS
-    self.tracer_bcs = tracer_name_value_pairs
+    # TRACER BOUNDARY CONDITIONS - incoming values for C_i for the tracer.
+    self.tracer_bc_values = tracer_name_value_pairs # key -> tracer name , value -> bc value for that tracer
+    for tracer_name in tracer_name_value_pairs.keys():
+      self.tracer_bcs[tracer_name].phi = tracer_name_value_pairs[tracer_name]
 
   # MASS EQUATION
   def solve_mass_equation(self, _dt: float):
@@ -303,7 +340,10 @@ class Channel:
     return max_diff
 
   # UPDATES DICT FOR INLET AND OUTLET CONDITIONS.
-  def update_channel_conditions(self):
+  def update_channel_conditions_TH(self):
+    """
+    Called at the end of a TH loop to update TH incoming and outgoing fluxes/values.
+    """
     self.channel_conditions['P_out'] = self.pressure.T[-1]
     self.channel_conditions['P_in'] = self.pressure_bc
     self.channel_conditions['dP'] = self.pressure.T[-1] - self.pressure_bc
@@ -336,20 +376,15 @@ class Channel:
     print("Channel solved after", iteration_num, "iterations!")
 
     # After we solve we update our channel conditions for later reference:
-    self.update_channel_conditions()
+    self.update_channel_conditions_TH()
 
     # Now update velocity face-fields from mdot and density solution
     self.mdot_to_velocities()
 
-  # TRACER SOLVING LOOP
-  def solve_channel_tracer(self, _dt: float):
-    pass
-
-
 
 class ChannelArray:
   """
-    Class of coupled channels.
+    Class of coupled channels in a channel array.
   """
   def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios, fluid: FluidRelation):
     # channels is a np array of subchannels
@@ -367,12 +402,25 @@ class ChannelArray:
     self.h_bc = None
     self.rho_bc = None
 
-  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float):
+    # Inlet BC dictionary for tracers:
+    self.tracer_bcs = {}
+
+  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict):
+    """
+    Called by ChannelInterface object to update/bcs for a channel.
+    """
+    # HANDLING THERMAL HYDRAULIC BOUNDARY CONDITIONS
     self.mdot_bc = mdot_bc # TOTAL mass flow rate across all coupled channels
     self.pressure_bc = pressure_bc # pressure value
     self.T_bc = T_bc # advected temperature value
     self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
     self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
+
+    # HANDLING TRACER BOUNDARY CONDITIONS
+    self.tracer_bcs = copy.deepcopy(tracer_name_value_pairs)
+    for key in self.tracer_bcs:
+      for ch in self.channels:
+        ch.tracer_bcs[key].phi = self.tracer_bcs[key]
 
   def get_outlet_conditions(self):
     """
@@ -397,8 +445,63 @@ class ChannelArray:
     # then get outlet temperature
     outlet_T = self.fluid.props_from_P_H(P=outlet_P, enthalpy=specific_enthalpy, prop='T')
 
-    return specific_enthalpy, outlet_P, outlet_T, mdot_sum
+    # Now do advected tracers:
+    tracer_outgoing_advected = {}
+    tracer_weighted_value = {} # C_out = int(C*A*U)_out / int(A*U)_out
+    for tracer_key in self.channels[0].tracers.keys():
+      advected_tracer = 0.0
+      area_total = 0.0
+      vol_flux = 0.0
+      for ch in self.channels:
+        # basic stuffs for this channel
+        vel = ch.velocity_faces.T[-1]
+        A = ch.area
 
+        # compute toitals
+        vol_flux += vel * ch.area
+        area_total += ch.area
+        advected_tracer_quantity += ch.tracers[tracer_key].T[-1] * vel * A
+
+      tracer_outgoing_advected[tracer_key] = advected_tracer_quantity
+      tracer_weighted_value[tracer_key] = advected_tracer_quantity / vol_flux
+
+
+    return specific_enthalpy, outlet_P, outlet_T, mdot_sum, tracer_weighted_value
+
+  def solve_channel_TH(self, _dt: float):
+    """
+    Solves thermal hydraulics for each channel in the array.
+    TODO need to include mass flow coupling/iterations.
+    TODO need to properly handle bc's in solving channel TH --- mostly done in set_bcs where
+         TODO we have to properly setup boundary conditions for each individual channel before we solve it here.
+    """
+    for ch in self.channels:
+      ch.solve_channel_TH(_dt=_dt)
+
+  def solve_tracer(self, name: str, _dt: float):
+    """
+    Solves Tracers for each channel in the array
+    """
+    for ch in self.channels:
+      ch.solve_tracer(name=name, _dt=_dt)
+
+  def add_tracer_to_channel(self, name: str,
+                 initial_value: np.ndarray | float,
+                 scheme: str,
+                 decay_const: float,
+                 boundary: str,
+                 phi: float,
+                 rho: float,
+                 source: float | np.ndarray):
+    """
+    Sets up tracers for all channels in this channel array.
+    Do not do this for transient cases since initial conditions are likely not the same for every single channel. Instead
+    use a pre-existing ChannelArray object
+    """
+    for ch in self.channels:
+      ch.add_tracer_to_channel(name=name, initial_value=initial_value,
+                               scheme=scheme,decay_const=decay_const,
+                               boundary=boundary,phi=phi,rho=rho,source=source)
 
 class ChannelInterface:
   """
@@ -418,23 +521,25 @@ class ChannelInterface:
     self.ch1 = ch1
     self.ch2 = ch2
   def update_interface_conditions(self):
-
+    """
+    Sets outgoing values of main channel (ch1) to incoming values of other channel (ch2)
+    """
     # Channel to channel scenario
     if isinstance(self.ch1, Channel) & isinstance(self.ch2, Channel):
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'])
 
     # Channel to channel array scenario
     elif isinstance(self.ch1, Channel) & isinstance(self.ch2, ChannelArray):
       # This means that Channel1 passes data to ChannelArray2
       # E.g. the case of lower plenum to core subchannels.
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'])
 
     # Channel array to channel scenario
-    elif isinstance(self.ch1, ChannelArray) & isinstance(self.ch2, ChannelArray):
-      _, outlet_P, outlet_T, mdot_sum = self.ch1.get_outlet_conditions()
-      self.ch2.set_bcs(pressure_bc=outlet_P, T_bc=outlet_T, mdot_bc=mdot_sum)
+    elif isinstance(self.ch1, ChannelArray) & isinstance(self.ch2, Channel):
+      _, outlet_P, outlet_T, mdot_sum, tracer_weighted_outlet_values = self.ch1.get_outlet_conditions()
+      self.ch2.set_bcs(pressure_bc=outlet_P, T_bc=outlet_T, mdot_bc=mdot_sum, tracer_name_value_pairs=tracer_weighted_outlet_values)
     else:
       raise Exception("Unknown interface type")
 
