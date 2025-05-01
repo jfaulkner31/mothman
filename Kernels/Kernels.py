@@ -371,6 +371,62 @@ class ImplicitReactionKernel(Kernel):
   def get_b(self):
     pass
 
+class ExplicitSourceKernel(Kernel):
+  """
+  Explicit Source Kernel: Q
+  Source is Q in terms of source/m3
+  Beta is a multiplier - e.g. delayed neutron fraction that just scales the source.
+  """
+  def __init__(self, field: ScalarField, mesh: Mesh_1D, Q: float | np.ndarray | ScalarField, beta: float):
+    super().__init__(field=field, mesh=mesh)
+    self.Q = Q
+    self.beta = beta
+
+  def get_aC(self):
+    pass
+  def get_aF(self):
+    pass
+  def get_b(self):
+    # RESET b
+    self.b *= 0.0
+
+    # ITERATE THROUGH b
+    for cid in self.mesh.cidList:
+
+      # SCALAR FIELD SOURCE
+      if isinstance(self.Q, ScalarField):
+        self.b[cid] = self.Q.T[cid] * self.mesh.cells[cid].vol * self.beta
+
+      # NP ARRAY SOURCE
+      elif isinstance(self.Q, np.ndarray):
+        self.b[cid] = self.Q[cid] * self.mesh.cells[cid].vol * self.beta
+
+      # FLOAT SOURCE
+      elif isinstance(self.Q, float):
+        self.b[cid] = self.Q * self.mesh.cells[cid].vol * self.beta
+
+      # EXCEPTION UNKNOWN TYPE
+      else:
+        raise Exception("Unknown ExplicitSource type for self.Q")
+
+class FirstOrderEulerTimeKernel(Kernel):
+  def __init__(self, field: ScalarField, mesh: Mesh_1D, rho: float, _dt: float):
+    super().__init__(field=field, mesh=mesh)
+    self._dt = _dt
+    self.rho = self.rho
+  def get_aC(self):
+    self.aC *= 0.0
+    for cid in self.mesh.cidList:
+      self.aC[cid,cid] += self.rho * self.mesh.cells[cid].vol / self._dt
+  def get_b(self):
+    pass
+  def get_aF(self):
+    pass
+
+
+
+
+
 ### BOUNDARY CONDITIONS ###
 class BoundaryCondition(Kernel):
   def __init__(self, field, mesh, boundary: str):

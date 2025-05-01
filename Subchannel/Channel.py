@@ -38,9 +38,13 @@ class Channel:
     areas = [area]*(self.nZones+1)
     self.mesh = Mesh_1D(nodeCoords=coords, faceAreas=
                         areas)
+    # Compute total channel volume
+    self.ch_volume = 0.0
+    for cid in self.mesh.cidList:
+      self.ch_volume += self.mesh.cells[cid].vol
 
     # Set boundary conditions
-    self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={})
+    self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={}, tracer_bool=False, th_bool=True)
 
     # Make some variables
     self.pressure = ScalarField(name='P', initial_value=self.pressure_bc, mesh=self.mesh)
@@ -101,7 +105,8 @@ class Channel:
                  boundary: str,
                  phi: float,
                  rho: float,
-                 source: float | np.ndarray):
+                 source: float | np.ndarray | ScalarField,
+                 beta: float):
     """
     Adds a tracer to the channel - advection + decay + source
     """
@@ -115,7 +120,8 @@ class Channel:
 
     # Add kernels to the tracer:
     self.tracer_kernels[name] = [AdvectionKernel(field=self.tracers[name], mesh=self.mesh, w=self.velocity_faces, scheme=scheme, rho=rho),
-                                 ImplicitReactionKernel(field=self.tracers[name], mesh=self.mesh, lam=decay_const)]
+                                 ImplicitReactionKernel(field=self.tracers[name], mesh=self.mesh, lam=decay_const),
+                                 ExplicitSourceKernel(field=self.tracers[name], mesh=self.mesh, Q=source, beta=beta)]
 
     # Add BC's to the tracer:
     self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
@@ -132,7 +138,7 @@ class Channel:
     solver.solve()
 
     # Update channel conditions dictionary at the inlet and outlet.
-    self.channel_conditions['tracers_in'][name] = self.tracer_bcs[name].phi # inlet value from BC
+    self.channel_conditions['tracers_in'][name] = self.tracer_bcs[name][0].phi # inlet value from BC
     self.channel_conditions['tracers_out'][name] = self.tracers[name].T[-1] # outlet value using zero gradient at the outlet
 
   def solve_all_tracers(self, _dt: float):
@@ -219,21 +225,23 @@ class Channel:
       raise Exception("Friction factor type unknown!")
 
   # UPDATE OR SET BOUNDARY CONDITIONS
-  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict):
+  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict, tracer_bool: bool, th_bool: bool):
     """
     Sets boundary conditions for the pressure, temperature, and mdot.
     """
     # TH BOUNDARY CONDITIONS
-    self.pressure_bc = pressure_bc
-    self.T_bc = T_bc
-    self.mdot_bc = mdot_bc
-    self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
-    self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
+    if th_bool:
+      self.pressure_bc = pressure_bc
+      self.T_bc = T_bc
+      self.mdot_bc = mdot_bc
+      self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
+      self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
 
     # TRACER BOUNDARY CONDITIONS - incoming values for C_i for the tracer.
-    self.tracer_bc_values = tracer_name_value_pairs # key -> tracer name , value -> bc value for that tracer
-    for tracer_name in tracer_name_value_pairs.keys():
-      self.tracer_bcs[tracer_name].phi = tracer_name_value_pairs[tracer_name]
+    if tracer_bool:
+      self.tracer_bc_values = tracer_name_value_pairs # key -> tracer name , value -> bc value for that tracer
+      for tracer_name in tracer_name_value_pairs.keys():
+        self.tracer_bcs[tracer_name][0].phi = tracer_name_value_pairs[tracer_name] # use index 0 since bcs is a list of bc's
 
   # MASS EQUATION
   def solve_mass_equation(self, _dt: float):
@@ -405,22 +413,24 @@ class ChannelArray:
     # Inlet BC dictionary for tracers:
     self.tracer_bcs = {}
 
-  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict):
+  def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict, tracer_bool: bool, th_bool: bool):
     """
     Called by ChannelInterface object to update/bcs for a channel.
     """
     # HANDLING THERMAL HYDRAULIC BOUNDARY CONDITIONS
-    self.mdot_bc = mdot_bc # TOTAL mass flow rate across all coupled channels
-    self.pressure_bc = pressure_bc # pressure value
-    self.T_bc = T_bc # advected temperature value
-    self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
-    self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
+    if th_bool:
+      self.mdot_bc = mdot_bc # TOTAL mass flow rate across all coupled channels
+      self.pressure_bc = pressure_bc # pressure value
+      self.T_bc = T_bc # advected temperature value
+      self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
+      self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
 
     # HANDLING TRACER BOUNDARY CONDITIONS
-    self.tracer_bcs = copy.deepcopy(tracer_name_value_pairs)
-    for key in self.tracer_bcs:
-      for ch in self.channels:
-        ch.tracer_bcs[key].phi = self.tracer_bcs[key]
+    if tracer_bool:
+      self.tracer_bcs = copy.deepcopy(tracer_name_value_pairs)
+      for key in self.tracer_bcs:
+        for ch in self.channels:
+          ch.tracer_bcs[key].phi = self.tracer_bcs[key]
 
   def get_outlet_conditions(self):
     """
@@ -492,7 +502,8 @@ class ChannelArray:
                  boundary: str,
                  phi: float,
                  rho: float,
-                 source: float | np.ndarray):
+                 source: float | np.ndarray | ScalarField,
+                 beta: float):
     """
     Sets up tracers for all channels in this channel array.
     Do not do this for transient cases since initial conditions are likely not the same for every single channel. Instead
@@ -501,7 +512,7 @@ class ChannelArray:
     for ch in self.channels:
       ch.add_tracer_to_channel(name=name, initial_value=initial_value,
                                scheme=scheme,decay_const=decay_const,
-                               boundary=boundary,phi=phi,rho=rho,source=source)
+                               boundary=boundary,phi=phi,rho=rho,source=source, beta=beta)
 
 class ChannelInterface:
   """
@@ -520,26 +531,30 @@ class ChannelInterface:
     # Channels
     self.ch1 = ch1
     self.ch2 = ch2
-  def update_interface_conditions(self):
+
+  def update_interface_conditions(self, tracer_bool: bool, th_bool: bool):
     """
     Sets outgoing values of main channel (ch1) to incoming values of other channel (ch2)
     """
     # Channel to channel scenario
     if isinstance(self.ch1, Channel) & isinstance(self.ch2, Channel):
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'],
+                       tracer_bool=tracer_bool, th_bool=th_bool)
 
     # Channel to channel array scenario
     elif isinstance(self.ch1, Channel) & isinstance(self.ch2, ChannelArray):
       # This means that Channel1 passes data to ChannelArray2
       # E.g. the case of lower plenum to core subchannels.
       cond1 = self.ch1.channel_conditions
-      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'])
+      self.ch2.set_bcs(pressure_bc=cond1['P_out'], T_bc=cond1['T_out'], mdot_bc=cond1['mdot_out'], tracer_name_value_pairs=cond1['tracers_out'],
+                       tracer_bool=tracer_bool, th_bool=th_bool)
 
     # Channel array to channel scenario
     elif isinstance(self.ch1, ChannelArray) & isinstance(self.ch2, Channel):
       _, outlet_P, outlet_T, mdot_sum, tracer_weighted_outlet_values = self.ch1.get_outlet_conditions()
-      self.ch2.set_bcs(pressure_bc=outlet_P, T_bc=outlet_T, mdot_bc=mdot_sum, tracer_name_value_pairs=tracer_weighted_outlet_values)
+      self.ch2.set_bcs(pressure_bc=outlet_P, T_bc=outlet_T, mdot_bc=mdot_sum, tracer_name_value_pairs=tracer_weighted_outlet_values,
+                       tracer_bool=tracer_bool, th_bool=th_bool)
     else:
       raise Exception("Unknown interface type")
 
