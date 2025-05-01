@@ -15,10 +15,11 @@ class BasicSolver():
     self.field = field
     self.A = self.kernels[0].aC * 0.0
     self.b = self.kernels[0].b * 0.0
-  def solve(self):
+  def solve(self, _dt: float):
     self.A *= 0.0
     self.b *= 0.0
     for k in self.kernels:
+      k.update_dt(_dt=_dt)
       k.update_coeffs()
       self.A += k.aC
       self.A += k.aF

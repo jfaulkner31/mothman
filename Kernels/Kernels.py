@@ -19,6 +19,7 @@ class Kernel:
     self.b = None
     self.aC = None # matrix aF
     self.aF = None # matrix aC
+    self._dt = None
 
     # initialize zeros --- really just initializing size of matrices
     self.b = np.zeros(self.mesh.nz)
@@ -41,6 +42,8 @@ class Kernel:
     pass
   def get_b(self):
     pass
+  def update_dt(self, _dt: float):
+    self._dt = _dt
   def plot_matrix(self):
     self.update_coeffs()
     A = abs(self.aC + self.aF)
@@ -410,10 +413,15 @@ class ExplicitSourceKernel(Kernel):
         raise Exception("Unknown ExplicitSource type for self.Q")
 
 class FirstOrderEulerTimeKernel(Kernel):
-  def __init__(self, field: ScalarField, mesh: Mesh_1D, rho: float, _dt: float):
+  """
+  First order explicit euler time scheme - VOL * RHO / DELTA_T * (PHI)
+  NOTE that _dt is handled via solve function that includes _dt in it.
+  NO need to include _dt in class definition since ideally the solver containing
+  this class as an object will pass in _dt.Fior
+  """
+  def __init__(self, field: ScalarField, mesh: Mesh_1D, rho: float):
     super().__init__(field=field, mesh=mesh)
-    self._dt = _dt
-    self.rho = self.rho
+    self.rho = rho
   def get_aC(self):
     self.aC *= 0.0
     for cid in self.mesh.cidList:
