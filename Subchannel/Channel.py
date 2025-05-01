@@ -121,7 +121,8 @@ class Channel:
     # Add kernels to the tracer:
     self.tracer_kernels[name] = [AdvectionKernel(field=self.tracers[name], mesh=self.mesh, w=self.velocity_faces, scheme=scheme, rho=rho),
                                  ImplicitReactionKernel(field=self.tracers[name], mesh=self.mesh, lam=decay_const),
-                                 ExplicitSourceKernel(field=self.tracers[name], mesh=self.mesh, Q=source, beta=beta)]
+                                 ExplicitSourceKernel(field=self.tracers[name], mesh=self.mesh, Q=source, beta=beta),
+                                 FirstOrderEulerTimeKernel(field=self.tracers[name], mesh=self.mesh, rho=rho)]
 
     # Add BC's to the tracer:
     self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
@@ -135,7 +136,7 @@ class Channel:
     solver = BasicSolver(kernels=self.tracer_kernels[name], bcs=self.tracer_bcs[name], field=self.tracers[name])
 
     # Solve
-    solver.solve()
+    solver.solve(_dt=_dt)
 
     # Update channel conditions dictionary at the inlet and outlet.
     self.channel_conditions['tracers_in'][name] = self.tracer_bcs[name][0].phi # inlet value from BC
