@@ -96,7 +96,6 @@ class Channel:
     self.channel_conditions['tracers_out'] = {} #
     self.tracer_dict = {} # time dependent tracer dict -> tracer_dict[tracer_name][_t] -> vector of values for this tracer
 
-
   # SETUP A TRACER FOR THIS CHANNEL OBJECT
   def add_tracer_to_channel(self, name: str,
                  initial_value: np.ndarray | float,
@@ -200,7 +199,11 @@ class Channel:
 
     # Saves data for tracers
     for name in self.tracers.keys():
-      self.tracer_dict[name][_t] = copy.deepcopy(self.tracers[name].T)
+      try:
+        self.tracer_dict[name][_t] = copy.deepcopy(self.tracers[name].T)
+      except:
+        self.tracer_dict[name] = {}
+        self.tracer_dict[name][_t] = copy.deepcopy(self.tracers[name].T)
 
   # SETS HEAT SOURCE
   def set_heat_source(self, heat_source: float | list, nZones: int):
@@ -389,6 +392,55 @@ class Channel:
 
     # Now update velocity face-fields from mdot and density solution
     self.mdot_to_velocities()
+
+  # POSTPROCESSING AND DATA RETRIEVAL FUNCTIONS
+  def get_tracer_vs_time(self, name: str, pos: int):
+    """
+    Gets tracer (name) at a certain position in the channel (pos) as a function of timestep.
+    """
+    t_vec = []
+    val_vec = []
+    for t in self.tracer_dict[name].keys():
+      t_vec.append(t)
+      val_vec.append(self.tracer_dict[name][t][pos])
+    return np.array(t_vec), np.array(val_vec)
+
+  def get_field_vs_time(self, name: str, pos: int):
+    """
+    Returns a field given a field name and the desired channel index as a function of time.
+    """
+    if name == 'mdot':
+      this_d = self.mdot_dict
+    elif name == 'rho':
+      this_d = self.rho_dict
+    elif name == 'pressure' | name == 'p':
+      this_d = self.pressure_dict
+    elif name == 'T' | name == 'temp' | name == "temperature":
+      this_d = self.temp_dict
+    elif name == 'rho' | name == 'density':
+      this_d = self.rho_dict
+    elif name == 'h' | name == 'enthalpy':
+      this_d = self.h_dict
+    else:
+      raise Exception("Requested field not known!")
+
+    t_vec = []
+    val_vec = []
+    for t in this_d.keys():
+      t_vec.append(t)
+      val_vec.append(this_d[t][pos])
+    return np.array(t_vec), np.array(val_vec)
+
+  def get_channel_residence_time(self):
+    """
+      Retrieves time spent in channel by the fluid.
+      velocity = mdot / rho / area
+      T = sum(dz_i / velocity_i)
+    """
+    tau = 0.0
+    for cid in self.mesh.cidList:
+      tau += self.mesh.cells[cid].dz / (self.mdot.T[cid] / self.rho.T[cid] / self.area)
+    return tau
 
 
 class ChannelArray:

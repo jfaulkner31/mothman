@@ -4,7 +4,7 @@ import copy
 
 # General field class
 class Field:
-  def __init__(self, name: str, initial_value: (np.ndarray, float), mesh: Mesh_1D):
+  def __init__(self, name: str, initial_value: np.ndarray | float, mesh: Mesh_1D):
     self.name = name
     self.mesh = mesh
     self.centroids = self.mesh.centroids
