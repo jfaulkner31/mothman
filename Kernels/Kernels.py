@@ -427,7 +427,9 @@ class FirstOrderEulerTimeKernel(Kernel):
     for cid in self.mesh.cidList:
       self.aC[cid,cid] += self.rho * self.mesh.cells[cid].vol / self._dt
   def get_b(self):
-    pass
+    self.b *= 0.0
+    for cid in self.mesh.cidList:
+      self.b[cid] += self.mesh.cells[cid].vol * self.field.T_old[cid] / self._dt
   def get_aF(self):
     pass
 
