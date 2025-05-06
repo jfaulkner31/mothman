@@ -1437,11 +1437,9 @@ flux.filters.append(meshFluxEnergyFilter)
 
 tallies_file.append(flux)
 
-
-
-
-
-
+fissions_downcomer = openmc.Tally(tally_id=100001, name='fissions_downcomer')
+fissions_downcomer.scores = ['fission']
+fissions_downcomer.filters.append()
 
 tallies_file.export_to_xml()
 ############################################
@@ -1480,7 +1478,7 @@ settings.export_to_xml()
 ############################################
 ### RUN OPENMC
 ############################################
-# openmc.run(threads=int(nthreads))
+openmc.run(threads=int(nthreads))
 
 
 ############################################
