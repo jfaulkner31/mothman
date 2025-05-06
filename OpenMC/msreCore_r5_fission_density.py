@@ -1437,9 +1437,30 @@ flux.filters.append(meshFluxEnergyFilter)
 
 tallies_file.append(flux)
 
+bypass_cell_filter = openmc.CellFilter([upcomer_cell])
+lower_plenum_cell_filter = openmc.CellFilter([lower_plena_fuel_cell])
+upper_plenum_cell_filter = openmc.CellFilter([upper_plenum_fuel_cell])
+downcomer_cell_filter = openmc.CellFilter([downcomer_cell])
+
 fissions_downcomer = openmc.Tally(tally_id=100001, name='fissions_downcomer')
+fissions_UP = openmc.Tally(tally_id=100002, name='fissions_UP')
+fissions_LP = openmc.Tally(tally_id=100003, name='fissions_LP')
+fissions_bypass = openmc.Tally(tally_id=100004, name='fissions_bypass')
+
 fissions_downcomer.scores = ['fission']
-fissions_downcomer.filters.append()
+fissions_UP.scores = ['fission']
+fissions_LP.scores = ['fission']
+fissions_bypass.scores = ['fission']
+
+fissions_downcomer.filters.append(downcomer_cell_filter)
+fissions_UP.filters.append(upper_plenum_cell_filter)
+fissions_LP.filters.append(lower_plenum_cell_filter)
+fissions_bypass.filters.append(bypass_cell_filter)
+
+tallies_file.append(fissions_downcomer)
+tallies_file.append(fissions_LP)
+tallies_file.append(fissions_UP)
+tallies_file.append(fissions_bypass)
 
 tallies_file.export_to_xml()
 ############################################
