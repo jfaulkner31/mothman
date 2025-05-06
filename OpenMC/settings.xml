@@ -1,10 +1,10 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version='1.0' encoding='UTF-8'?>
 <settings>
   <run_mode>eigenvalue</run_mode>
-  <particles>100</particles>
-  <batches>300</batches>
-  <inactive>100</inactive>
-  <source strength="1.0">
+  <particles>250000</particles>
+  <batches>450</batches>
+  <inactive>50</inactive>
+  <source particle="neutron" strength="1.0" type="independent">
     <space type="box">
       <parameters>-70 -70 -85.0 70 70 85.0</parameters>
     </space>
