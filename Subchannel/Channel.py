@@ -40,8 +40,10 @@ class Channel:
                         areas)
     # Compute total channel volume
     self.ch_volume = 0.0
+    self.vol_vec = np.array([])
     for cid in self.mesh.cidList:
       self.ch_volume += self.mesh.cells[cid].vol
+      self.vol_vec = np.append(self.vol_vec, self.mesh.cells[cid].vol)
 
     # Set boundary conditions
     self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={}, tracer_bool=False, th_bool=True)
@@ -108,6 +110,8 @@ class Channel:
                  beta: float):
     """
     Adds a tracer to the channel - advection + decay + source
+    No need to redo this function for transient cases - usually we want to use a pre-existing
+    channel object that already has tracer concentrations solved for!
     """
 
     # Raise Exception (only 1 way advection supported currently since I am lazy and it really doesnt matter for 1D)
@@ -126,7 +130,7 @@ class Channel:
     # Add BC's to the tracer:
     self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
 
-  # SOLUTION FOR CHANNEL TRACER
+  # SOLUTION FOR CHANNEL TRACERS
   def solve_tracer(self, name: str, _dt: float):
     """
     Solves tracer equations.
@@ -385,7 +389,7 @@ class Channel:
       max_diff = self.solve_EOS() # solves and updates temperature and density - returns maximum temp diff.
 
     # Print?
-    print("Channel solved after", iteration_num, "iterations!")
+    # print("Channel solved after", iteration_num, "iterations!")
 
     # After we solve we update our channel conditions for later reference:
     self.update_channel_conditions_TH()
@@ -446,15 +450,33 @@ class Channel:
 class ChannelArray:
   """
     Class of coupled channels in a channel array.
+    Most ChannelArray functions are those that are
+    called externally:
+
+    set_bcs():
+    get_outlet_conditions():
+    solve_channel_TH():
+    solve_tracer():
+    solve_all_tracers():
+    add_tracer_to_channel():
   """
-  def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios, fluid: FluidRelation):
+  def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation):
     # channels is a np array of subchannels
     self.channels = channels
+
+    # fluid
+    self.fluid = fluid
 
     # coupling method either prescribed mass flow ratios for each channel OR pressure based
     self.coupling_method = coupling_method
     if (self.coupling_method != 'pressure_method') & (self.coupling_method != 'ratio_method'):
       raise Exception("Unknown method for coupling channel array!")
+    if self.coupling_method == 'ratio_method':
+      if len(self.channels) == len(flow_ratios):
+        self.flow_ratios = flow_ratios / sum(flow_ratios) # normalize to 1.0
+      else:
+        raise Exception("Length of flow ratios and length of channels is not the same!")
+
 
     # Boundary condition at the inlet of the channel array
     self.mdot_bc = None # TOTAL mass flow rate into all channels
@@ -462,10 +484,13 @@ class ChannelArray:
     self.T_bc = None
     self.h_bc = None
     self.rho_bc = None
+    self.mdot_by_channel = None
 
     # Inlet BC dictionary for tracers:
     self.tracer_bcs = {}
 
+
+  ### NECESSARY FOR PASSING / SETTING DATA
   def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict, tracer_bool: bool, th_bool: bool):
     """
     Called by ChannelInterface object to update/bcs for a channel.
@@ -473,17 +498,22 @@ class ChannelArray:
     # HANDLING THERMAL HYDRAULIC BOUNDARY CONDITIONS
     if th_bool:
       self.mdot_bc = mdot_bc # TOTAL mass flow rate across all coupled channels
+      self.set_array_mdot_by_channel() # updates mdot by channel
       self.pressure_bc = pressure_bc # pressure value
       self.T_bc = T_bc # advected temperature value
       self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
       self.rho_bc = self.fluid.props_from_P_H(P=self.pressure_bc, enthalpy=self.h_bc, prop='rho')
+      for ch_idx, ch in enumerate(self.channels):
+        ch.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc,
+                   mdot_bc=self.mdot_by_channel[ch_idx],
+                   tracer_name_value_pairs=tracer_name_value_pairs, tracer_bool=tracer_bool, th_bool=th_bool)
 
     # HANDLING TRACER BOUNDARY CONDITIONS
     if tracer_bool:
-      self.tracer_bcs = copy.deepcopy(tracer_name_value_pairs)
-      for key in self.tracer_bcs:
-        for ch in self.channels:
-          ch.tracer_bcs[key].phi = self.tracer_bcs[key]
+      for ch in self.channels:
+        ch.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc,
+                          tracer_name_value_pairs=tracer_name_value_pairs,
+                          tracer_bool=tracer_bool, th_bool=th_bool)
 
   def get_outlet_conditions(self):
     """
@@ -512,7 +542,7 @@ class ChannelArray:
     tracer_outgoing_advected = {}
     tracer_weighted_value = {} # C_out = int(C*A*U)_out / int(A*U)_out
     for tracer_key in self.channels[0].tracers.keys():
-      advected_tracer = 0.0
+      advected_tracer_quantity = 0.0
       area_total = 0.0
       vol_flux = 0.0
       for ch in self.channels:
@@ -531,6 +561,7 @@ class ChannelArray:
 
     return specific_enthalpy, outlet_P, outlet_T, mdot_sum, tracer_weighted_value
 
+  # SOLVING TH
   def solve_channel_TH(self, _dt: float):
     """
     Solves thermal hydraulics for each channel in the array.
@@ -538,15 +569,24 @@ class ChannelArray:
     TODO need to properly handle bc's in solving channel TH --- mostly done in set_bcs where
          TODO we have to properly setup boundary conditions for each individual channel before we solve it here.
     """
+    self.update_mdots() # update mass flow rates in the channels.
     for ch in self.channels:
       ch.solve_channel_TH(_dt=_dt)
 
+  ### TRACERS
   def solve_tracer(self, name: str, _dt: float):
     """
     Solves Tracers for each channel in the array
     """
     for ch in self.channels:
       ch.solve_tracer(name=name, _dt=_dt)
+
+  def solve_all_tracers(self, _dt: float):
+    """
+    Solves all tracers in each channel.
+    """
+    for ch in self.channels:
+      ch.solve_all_tracers(_dt=_dt)
 
   def add_tracer_to_channel(self, name: str,
                  initial_value: np.ndarray | float,
@@ -566,6 +606,50 @@ class ChannelArray:
       ch.add_tracer_to_channel(name=name, initial_value=initial_value,
                                scheme=scheme,decay_const=decay_const,
                                boundary=boundary,phi=phi,rho=rho,source=source, beta=beta)
+
+  ### HANDLING MASS FLOW RATES
+  def set_array_mdot_by_channel(self):
+    """
+    Mass flow rate by channel.
+
+    Total mdot: float
+
+    Returns/does nothing but updates self.mdot_by_channel
+    """
+    # METHOD WHERE THE MASS FLOW RATIOS ARE GIVEN BY USER INPUT
+    mdot_by_channel = np.zeros(len(self.channels))
+    if self.coupling_method == 'ratio_method':
+      self.flow_ratios = self.flow_ratios / sum(self.flow_ratios)
+      for idx, ch in  enumerate(self.channels):
+        mdot_by_channel[idx] = self.flow_ratios[idx] * self.mdot_bc
+      self.mdot_by_channel = mdot_by_channel # updates mdot by channel
+    else:
+      raise Exception("Unknown flow method!")
+
+  def update_mdots(self):
+    """
+    Updates self.Channel objects values of mass flow rates
+    """
+    self.set_array_mdot_by_channel()
+    for idx, ch in enumerate(self.channels):
+      ch.mdot_bc = self.mdot_by_channel[idx]
+
+  # GET CHANNEL RESIDENCE TIME
+  def get_channel_residence_time(self):
+    tau = 0.0
+    for ch in self.channels:
+      tau += ch.get_channel_residence_time()
+    return tau / len(self.channels)
+
+  ### UPDATING OLD TO NEW VALUES
+  def update_old_to_most_recent(self):
+    for ch in self.channels:
+      ch.update_old_to_most_recent()
+
+  ### SAVE DATA
+  def save_data(self, _t: float):
+    for ch in self.channels:
+      ch.save_data(_t=_t)
 
 class ChannelInterface:
   """
@@ -610,4 +694,3 @@ class ChannelInterface:
                        tracer_bool=tracer_bool, th_bool=th_bool)
     else:
       raise Exception("Unknown interface type")
-
