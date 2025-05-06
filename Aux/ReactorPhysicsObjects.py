@@ -6,6 +6,7 @@ from Solvers.Solvers import *
 from Subchannel.FluidRelation import FluidRelation
 from Subchannel.Channel import Channel
 from Subchannel.Channel import ChannelInterface
+from Subchannel.Channel import ChannelArray
 import copy
 
 def compute_beff_numerator(channel: Channel, name: str, weight: np.ndarray | float | ScalarField):
@@ -24,10 +25,7 @@ def compute_beff_numerator(channel: Channel, name: str, weight: np.ndarray | flo
     weight = weight
 
   # Now integrate:
-  integral = 0.0
-  for cid in channel.mesh.cidList:
-    vol = channel.mesh.cells[cid].vol
-    integral += C[cid] * lam * vol * weight[cid]
+  integral = sum(C * lam * channel.vol_vec * weight)
 
   return integral
 
@@ -42,7 +40,7 @@ def compute_beff(channel, names: list, weight: np.ndarray | float | ScalarField)
     beff_num_list.append(this_int)
     num_int += this_int
 
-    # Compute physicl delayed neutron fraction
+    # Get physical delayed neutron fraction
     beta_sum += channel.tracer_kernels[name][2].beta
 
   # Now convert weight function to something usable:
@@ -68,5 +66,52 @@ def compute_beff(channel, names: list, weight: np.ndarray | float | ScalarField)
 
   return beff, beta_i
 
+def compute_beff_multichannel(channels: list, names: list, weights: list):
+  beta_num_list = []
+  num_int = 0.0
+  beta_sum = 0.0
 
+  # Integrate Numerator
+  for idx, this_ch in enumerate(channels):
+    for name_idx, this_name in enumerate(names):
+      # CHANNELS
+      this_int = compute_beff_numerator(channel=this_ch, name=this_name, weight=weights[idx])
+      num_int += this_int
+      # STORE RESULTS
+      try:
+        beta_num_list[name_idx] += this_int
+      except:
+        beta_num_list.append(this_int)
 
+  # Get physical DNP's for each channel
+  beta_physical_by_channel = []
+  for this_ch in channels:
+    beta_phys_sum = 0.0
+    for name in names:
+      beta_phys_sum += this_ch.tracer_kernels[name][2].beta
+    beta_physical_by_channel.append(beta_phys_sum)
+
+  # Integrate denominator
+  prompt_int = 0.0
+  for idx, this_ch in enumerate(channels):
+    beta_sum_this_ch = beta_physical_by_channel[idx]
+
+    # Get weight as a field
+    nz = len(this_ch.mesh.cidList)
+    if isinstance(weights[idx],float):
+      this_wt = np.ones(nz)*weights[idx]
+    elif isinstance(weights[idx], ScalarField):
+      this_wt = copy.deepcopy(weights[idx].T)
+    else:
+      this_wt = copy.deepcopy(weights[idx])
+
+    # denominator math now
+    prompt_int += sum(this_wt * this_wt * this_ch.vol_vec) # * (1-beta_sum_this_ch)
+
+  # Get real beff
+  beff = num_int / (num_int + prompt_int)
+
+  # Beff by dnp:
+  beta_eff_by_dnp = [this / (num_int + prompt_int) for this in beta_num_list]
+
+  return beff, beta_eff_by_dnp

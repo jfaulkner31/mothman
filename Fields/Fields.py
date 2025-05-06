@@ -161,6 +161,15 @@ class ScalarField(Field):
     grad_f_vec = np.append(lower_real_face_gradient, grad_f_vec)
     grad_f_vec = np.append(grad_f_vec, upper_real_face_gradient)
 
+  def field_volume_integral(self):
+    """
+    Integrates field variable over volume: self.T * dV
+    """
+    integral = 0.0
+    for cid in self.mesh.cidList:
+      integral += self.T[cid] * self.mesh.cells[cid].vol
+    return integral
+
 class FaceField:
   """
     A field where values are stored on the faces.
