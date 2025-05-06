@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='utf-8'?>
+<settings>
+  <run_mode>eigenvalue</run_mode>
+  <particles>100</particles>
+  <batches>300</batches>
+  <inactive>100</inactive>
+  <source strength="1.0">
+    <space type="box">
+      <parameters>-70 -70 -85.0 70 70 85.0</parameters>
+    </space>
+  </source>
+  <output>
+    <tallies>false</tallies>
+  </output>
+  <temperature_method>interpolation</temperature_method>
+  <volume_calc>
+    <domain_type>cell</domain_type>
+    <domain_ids>127</domain_ids>
+    <samples>5000000000</samples>
+    <lower_left>-81.28 -81.28 -135.09</lower_left>
+    <upper_right>81.28 81.28 -83.09</upper_right>
+  </volume_calc>
+  <volume_calc>
+    <domain_type>cell</domain_type>
+    <domain_ids>126</domain_ids>
+    <samples>5000000000</samples>
+    <lower_left>-81.28 -81.28 83.09</lower_left>
+    <upper_right>81.28 81.28 135.09</upper_right>
+  </volume_calc>
+</settings>
