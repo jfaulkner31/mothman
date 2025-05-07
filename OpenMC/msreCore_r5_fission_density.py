@@ -1431,11 +1431,49 @@ meshFluxMeshFilter = openmc.MeshFilter(meshFluxMesh)
 meshFluxEnergyFilter = openmc.EnergyFilter(groups)
 
 flux = openmc.Tally(tally_id=9999, name="fluxMeshTally")
-flux.scores = ['flux', 'fission']
+flux.scores = ['flux']
 flux.filters.append(meshFluxMeshFilter)
 flux.filters.append(meshFluxEnergyFilter)
 
 tallies_file.append(flux)
+
+fissionMesh = openmc.RectilinearMesh(mesh_id=101, name='fission_mesh')
+fissionMesh.x_grid = np.array([-13.5*L-rad,     -13.5*L+rad,
+                               -13.5*L+1*L-rad, -13.5*L+1*L+rad,
+                               -13.5*L+2*L-rad, -13.5*L+2*L+rad,
+                               -13.5*L+3*L-rad, -13.5*L+3*L+rad,
+                               -13.5*L+4*L-rad, -13.5*L+4*L+rad,
+                               -13.5*L+5*L-rad, -13.5*L+5*L+rad,
+                               -13.5*L+6*L-rad, -13.5*L+6*L+rad,
+                               -13.5*L+7*L-rad, -13.5*L+7*L+rad,
+                               -13.5*L+8*L-rad, -13.5*L+8*L+rad,
+                               -13.5*L+9*L-rad, -13.5*L+9*L+rad,
+                               -13.5*L+10*L-rad, -13.5*L+10*L+rad,
+                               -13.5*L+11*L-rad, -13.5*L+11*L+rad,
+                               -13.5*L+12*L-rad, -13.5*L+12*L+rad,
+                               -13.5*L+13*L-rad, -13.5*L+13*L+rad,
+                               -13.5*L+14*L-rad, -13.5*L+14*L+rad,
+                               -13.5*L+15*L-rad, -13.5*L+15*L+rad,
+                               -13.5*L+16*L-rad, -13.5*L+16*L+rad,
+                               -13.5*L+17*L-rad, -13.5*L+17*L+rad,
+                               -13.5*L+18*L-rad, -13.5*L+18*L+rad,
+                               -13.5*L+19*L-rad, -13.5*L+19*L+rad,
+                               -13.5*L+20*L-rad, -13.5*L+20*L+rad,
+                               -13.5*L+21*L-rad, -13.5*L+21*L+rad,
+                               -13.5*L+22*L-rad, -13.5*L+22*L+rad,
+                               -13.5*L+23*L-rad, -13.5*L+23*L+rad,
+                               -13.5*L+24*L-rad, -13.5*L+24*L+rad,
+                               -13.5*L+25*L-rad, -13.5*L+25*L+rad,
+                               -13.5*L+26*L-rad, -13.5*L+26*L+rad,
+                               -13.5*L+27*L-rad, -13.5*L+27*L+rad])
+fissionMesh.y_grid = fissionMesh.x_grid
+fissionMesh.z_grid = np.linspace(core_lower_z, core_upper_z, 51)
+fissionMeshFilter = openmc.MeshFilter(fissionMesh)
+
+fission_grid_tally = openmc.Tally(tally_id=100000, name='fission_mesh')
+fission_grid_tally.scores = ['fission']
+fission_grid_tally.filters.append(fissionMeshFilter)
+tallies_file.append(fission_grid_tally)
 
 bypass_cell_filter = openmc.CellFilter([upcomer_cell])
 lower_plenum_cell_filter = openmc.CellFilter([lower_plena_fuel_cell])
