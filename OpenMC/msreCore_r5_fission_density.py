@@ -1537,7 +1537,7 @@ settings.export_to_xml()
 ############################################
 ### RUN OPENMC
 ############################################
-openmc.run(threads=int(nthreads))
+# openmc.run(threads=int(nthreads))
 
 
 ############################################
