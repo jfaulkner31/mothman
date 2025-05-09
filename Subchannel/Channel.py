@@ -217,6 +217,15 @@ class Channel:
     else:
       self.heat_source = heat_source # if heat source is a list
 
+  # SET ANNULUS PARAMETERS
+  def set_annulus_parameters(self, Rout: float, Rin: float):
+    """
+    Sets parameters for the channel if it is an annulus -
+    Rout and Rin are extra variables needed for calculation of the friction factors in the annulus.
+    """
+    self.Rout = Rout
+    self.Rin = Rin
+
   # FRICTION FACTOR CORRELATIONS
   def get_friction_factor(self, Reynolds: float):
     # Friction  factors for a channel from the thesis Luzzi et al., 2010
@@ -226,9 +235,19 @@ class Channel:
       elif Reynolds <= 3000:
         return 64.0 / Reynolds
   # CASE OF NO FRICTION FACTOR CORRELATIONS
-    if self.fric == 'none':
+    elif self.fric == 'none':
       return 0.0
     # Unknown!
+    elif self.fric == 'annulus':
+      if Reynolds > 3000:
+        return 0.3160 / Reynolds**0.25
+      else:
+        Rout = self.Rout
+        Rin = self.Rin
+        first = 64.0 / Reynolds
+        top = (Rout - Rin)**2
+        bottom = Rout**2 + Rin**2 - (Rout**2 - Rin**2)/np.log(Rout/Rin)
+        return first*top/bottom
     else:
       raise Exception("Friction factor type unknown!")
 
@@ -446,6 +465,11 @@ class Channel:
       tau += self.mesh.cells[cid].dz / (self.mdot.T[cid] / self.rho.T[cid] / self.area)
     return tau
 
+  def get_dp(self):
+    """
+    Gets pressure drop from top to bottom.
+    """
+    return self.channel_conditions['dP']
 
 class ChannelArray:
   """
@@ -460,7 +484,8 @@ class ChannelArray:
     solve_all_tracers():
     add_tracer_to_channel():
   """
-  def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation):
+  def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation,
+               mdot_relaxtion=1.0, epsilon=1e-6):
     # channels is a np array of subchannels
     self.channels = channels
 
@@ -489,6 +514,13 @@ class ChannelArray:
     # Inlet BC dictionary for tracers:
     self.tracer_bcs = {}
 
+    # Information for mdot iteration methodology
+    self.mdot_iteration_number = int(-1)
+    self.mdot_by_channel_PREVIOUS = None # mdots from previous mdot iteration
+    self.mdot_relaxation = mdot_relaxtion # relaxation factor 0-1
+    self.epsilon = epsilon # how tight mdots are converged
+    self.dp_by_channel_PREVIOUS = np.zeros(len(self.channels)) # pressures from previous mdot iteration
+    self.max_channel_mdot_diff = 1.0
 
   ### NECESSARY FOR PASSING / SETTING DATA
   def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict, tracer_bool: bool, th_bool: bool):
@@ -569,9 +601,22 @@ class ChannelArray:
     TODO need to properly handle bc's in solving channel TH --- mostly done in set_bcs where
          TODO we have to properly setup boundary conditions for each individual channel before we solve it here.
     """
-    self.update_mdots() # update mass flow rates in the channels.
-    for ch in self.channels:
-      ch.solve_channel_TH(_dt=_dt)
+
+    if self.coupling_method == 'pressure_method':
+      print("Now converging channel arrays ...")
+      diff = 1.0
+      iter_num = int(0)
+      while self.max_channel_mdot_diff > self.epsilon:
+        iter_num += 1
+        self.update_mdots()
+        print("\tIteration number", iter_num, "... Rel. Diff. Before iterating =", self.max_channel_mdot_diff)
+        for ch in self.channels:
+          ch.solve_channel_TH(_dt=_dt)
+      print("\tSolved channel coupling")
+    else:
+      self.update_mdots() # update mass flow rates in the channels.
+      for ch in self.channels:
+        ch.solve_channel_TH(_dt=_dt)
 
   ### TRACERS
   def solve_tracer(self, name: str, _dt: float):
@@ -616,15 +661,102 @@ class ChannelArray:
 
     Returns/does nothing but updates self.mdot_by_channel
     """
-    # METHOD WHERE THE MASS FLOW RATIOS ARE GIVEN BY USER INPUT
+
+    # Prep vector to store mdots by channel
     mdot_by_channel = np.zeros(len(self.channels))
+
+    ### PRE-DEFINED RATIO METHOD ###
     if self.coupling_method == 'ratio_method':
       self.flow_ratios = self.flow_ratios / sum(self.flow_ratios)
       for idx, ch in  enumerate(self.channels):
         mdot_by_channel[idx] = self.flow_ratios[idx] * self.mdot_bc
-      self.mdot_by_channel = mdot_by_channel # updates mdot by channel
+
+    ### PRESSURE METHOD ###
+    elif self.coupling_method == 'pressure_method':
+
+      # VERY FIRST TIME WE ARE DOING THE ITERATION AND WE HAVE NO FIRST GUESS #
+      if self.mdot_iteration_number == -1:
+        # COMPUTE TOTAL AREA AND SUPPLY MDOT BASED ON AREA FRACTION AS A FIRST GUESS #
+        total_area = 0.0
+        for ch in self.channels:
+          total_area += ch.area
+        print("Iterating ChannelArray mass flows for first time, total area is", total_area)
+        for idx, ch in enumerate(self.channels):
+          mdot_ratio_dummy_value = ch.area / total_area
+          this_mdot = mdot_ratio_dummy_value * self.mdot_bc
+          mdot_by_channel[idx] = this_mdot
+        self.mdot_iteration_number = int(0)
+
+     # SECOND TIME DOING THE ITERATION #
+      elif self.mdot_iteration_number == 0:
+        dp_bar = self.compute_avg_pressure_drop()
+        # GUESS NEW VALUES #
+        for idx, ch in enumerate(self.channels):
+          mdot_by_channel[idx] = self.mdot_by_channel[idx] * (2.0 - ch.get_dp()/dp_bar)
+
+        # NORMALIZE VALUES #
+        normalize_to = self.mdot_bc
+        mdot_by_channel = self.normalize_vector(normalize_to=normalize_to, vec=mdot_by_channel)
+
+        self.mdot_iteration_number = int(1)
+
+      # COMPUTE BASED ON FORMULA FROM THESIS #
+      else:
+        """
+          M_n+1 = (m_n - m_n-1) / (dP_n - dP_n-1) * (dP_AVG - dP_n) + m_n
+          n+1: next guess aka new value
+          n: current value
+          n-1: previous guess
+        """
+        dp_bar = self.compute_avg_pressure_drop()
+        for idx, ch in enumerate(self.channels):
+          this_dp = ch.get_dp()
+          this_dp_old = self.dp_by_channel_PREVIOUS[idx]
+          top = (self.mdot_by_channel[idx] - self.mdot_by_channel_PREVIOUS[idx])
+          bottom = (this_dp - this_dp_old)
+          top_2 = (dp_bar - this_dp)
+          mdot_by_channel[idx] = self.mdot_relaxation * top*top_2 / bottom + self.mdot_by_channel[idx]
+
+        # NORMALIZE VALUES #
+        mdot_by_channel = self.normalize_vector(normalize_to=self.mdot_bc, vec=mdot_by_channel)
     else:
       raise Exception("Unknown flow method!")
+
+    ### MDOT ITERATION DIFFERENCE ###
+    # get new minus old - take absolute value - take max of that.
+    if self.mdot_iteration_number == 0: #if previous does not exist yet - e.g. first iteration
+      self.max_channel_mdot_diff = 1.0
+    else:
+      if self.coupling_method == 'ratio_method':
+        pass
+      else:
+        self.max_channel_mdot_diff = max(abs(mdot_by_channel/self.mdot_by_channel - 1.0))
+
+    ### UPDATE OLD VALUES BEFORE WE UPDATE NEW VALUES ###
+    self.mdot_by_channel_PREVIOUS = copy.deepcopy(self.mdot_by_channel)
+
+    ### UPDATE INTERNAL VALUE FOR STORING CURRENT (n+1) VALUES OF MDOT ###
+    self.mdot_by_channel = mdot_by_channel # updates mdot by channel
+
+    ### UPDATE PREVIOUS PRESSURE DROP VALUES ###
+    for idx, ch in enumerate(self.channels):
+      self.dp_by_channel_PREVIOUS[idx] = ch.get_dp()
+
+  def normalize_vector(self, normalize_to: float, vec: np.ndarray):
+    """
+    vec: a vector
+    normalize_to: what we want to normalize the vector to
+    """
+    return vec / np.sum(vec) * normalize_to
+
+  def compute_avg_pressure_drop(self):
+    """
+    Computes the average pressure drop in the channel array.
+    """
+    psum = 0.0
+    for ch in self.channels:
+      psum += ch.get_dp()
+    return psum / len(self.channels)
 
   def update_mdots(self):
     """
