@@ -1,9 +1,19 @@
+# NUMPY
 import numpy as np
+
+# MOTHMAN
 from .FluidRelation import FluidRelation
 from Meshing.Meshing import *
 from Fields.Fields import *
 from Kernels.Kernels import *
 from Solvers.Solvers import *
+
+# MPL
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+import matplotlib.cm as cm
+import matplotlib.colors as colors
+from matplotlib.patches import Rectangle
 
 class Channel:
   def __init__(self, gravity: float,
@@ -32,6 +42,8 @@ class Channel:
     self.fluid = fluid
     self.fric = fric
     self.set_heat_source(nZones=nZones, heat_source=heat_source)
+    self.xCoord = None
+    self.yCoord = None
 
     # Make a mesh
     coords = np.linspace(L0,L1,self.nZones+1)
@@ -85,6 +97,9 @@ class Channel:
     self.channel_conditions['T_in'] = None
     self.channel_conditions['T_out'] = None
 
+    # Pressure drop form factor loss coeffs (defaults of 0.0)
+    self.entry_form_loss = 0.0
+    self.exit_form_loss = 0.0
 
     # Channel face field handling -> FaceField for velocity essentially.
     self.velocity_faces = FaceField(name='vel', initial_value=0.0 , mesh=self.mesh) # nZones + 1
@@ -237,7 +252,6 @@ class Channel:
   # CASE OF NO FRICTION FACTOR CORRELATIONS
     elif self.fric == 'none':
       return 0.0
-    # Unknown!
     elif self.fric == 'annulus':
       if Reynolds > 3000:
         return 0.3160 / Reynolds**0.25
@@ -351,6 +365,11 @@ class Channel:
       # compute friction factor
       Reynolds = self.mdot.T[cid] * self.Dh * self.rho.T[cid] / self.fluid.get_mu()
       _fric = self.get_friction_factor(Reynolds=Reynolds)
+      # add form loss coeffs to friction factor if entry or exit conditions.
+      if cid == 0:
+        _fric += self.entry_form_loss * self.Dh / dz
+      elif cid == self.mesh.cidLast:
+        _fric += self.exit_form_loss * self.Dh / dz
 
       # additional b terms
       self.b_momentum[cid] += (
@@ -471,6 +490,18 @@ class Channel:
     """
     return self.channel_conditions['dP']
 
+  def set_xy(self, x: float, y: float):
+    self.xCoord = x
+    self.yCoord = y
+
+  def set_form_loss_coeffs(self, inlet: float, outlet: float):
+    """
+    Sets values of K - form loss coefficients - for channel exit and entry.
+    Default values of 0.0 are given if this is never called for the channel.
+    """
+    self.entry_form_loss = inlet
+    self.exit_form_loss = outlet
+
 class ChannelArray:
   """
     Class of coupled channels in a channel array.
@@ -485,7 +516,7 @@ class ChannelArray:
     add_tracer_to_channel():
   """
   def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation,
-               mdot_relaxtion=1.0, epsilon=1e-6):
+               mdot_relaxation=1.0, epsilon=1e-6):
     # channels is a np array of subchannels
     self.channels = channels
 
@@ -517,7 +548,7 @@ class ChannelArray:
     # Information for mdot iteration methodology
     self.mdot_iteration_number = int(-1)
     self.mdot_by_channel_PREVIOUS = None # mdots from previous mdot iteration
-    self.mdot_relaxation = mdot_relaxtion # relaxation factor 0-1
+    self.mdot_relaxation = mdot_relaxation # relaxation factor 0-1
     self.epsilon = epsilon # how tight mdots are converged
     self.dp_by_channel_PREVIOUS = np.zeros(len(self.channels)) # pressures from previous mdot iteration
     self.max_channel_mdot_diff = 1.0
@@ -597,9 +628,6 @@ class ChannelArray:
   def solve_channel_TH(self, _dt: float):
     """
     Solves thermal hydraulics for each channel in the array.
-    TODO need to include mass flow coupling/iterations.
-    TODO need to properly handle bc's in solving channel TH --- mostly done in set_bcs where
-         TODO we have to properly setup boundary conditions for each individual channel before we solve it here.
     """
 
     if self.coupling_method == 'pressure_method':
@@ -613,11 +641,12 @@ class ChannelArray:
         for ch in self.channels:
           ch.solve_channel_TH(_dt=_dt)
       print("\tSolved channel coupling")
-    else:
+    elif self.coupling_method == 'ratio_method':
       self.update_mdots() # update mass flow rates in the channels.
       for ch in self.channels:
         ch.solve_channel_TH(_dt=_dt)
-
+    else:
+      raise Exception("Method not yet added for solve_channel_TH()")
   ### TRACERS
   def solve_tracer(self, name: str, _dt: float):
     """
@@ -782,6 +811,126 @@ class ChannelArray:
   def save_data(self, _t: float):
     for ch in self.channels:
       ch.save_data(_t=_t)
+
+  ### PLOTTING STUFF
+  def plot_map(self, zNode: int, var: str, figsize: tuple, radius: float,
+               cmap_label: str, cmap_fontsize=15, cmap_name='RdBu_r', x_label='X (cm)', y_label='Y (cm)',
+               cmap_minmax='default'):
+    """
+    Plots a channel by channel map of the chosen variable.
+    Only plots stuff that has an x and a y value -- all others are ignored.
+      zNode: float - which node to plot on the xy plane
+      var: str - which variable to plot
+      figsize: tuple - (x,y) tuple showing figisze for plot option
+      radius: radius of square (center to side) or half the side length of the square
+      colors: matplotlib.cm - which colormap to use
+      cmap_label: str - label to use along the color scale
+      cmap_fontsize: int - default 15
+      cmap_name: str - default RdBu_r - which cmap from mpl to use.
+      x_label: str
+      y_label: str
+    """
+    x = []
+    y = []
+    vals = []
+    if (var == 'mdot') | (var == 'm') | (var == 'flow'):
+      labelString = 'Mass flow rate (kg/s)'
+      for chan in self.channels:
+        if chan.xCoord is not None: # xy pair already set.
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          vals.append(chan.mdot.T[zNode])
+    elif (var == 'exit_loss'):
+      labelString = 'Exit loss coefficient (-)'
+      for chan in  self.channels:
+        if chan.xCoord is not None: # xy pair already set.
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          vals.append(chan.exit_form_loss)
+    elif (var == 'entry_loss'):
+      labelString = 'Entry loss coefficient (-)'
+      for chan in  self.channels:
+        if chan.xCoord is not None: # xy pair already set.
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          vals.append(chan.entry_form_loss)
+    elif (var == 'fission_src'):
+      labelString = 'Fission source (1/cm3-s)'
+      for chan in self.channels:
+        if chan.xCoord is not None:
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          random_tracer_name = list(chan.tracers.keys())[0]
+          src = chan.tracer_kernels[random_tracer_name][2].Q
+          if isinstance(src, ScalarField):
+            vals.append(src.T[zNode])
+          elif isinstance(src, float):
+            vals.append(src)
+          elif isinstance(src, np.ndarray):
+            vals.append(src[zNode])
+          else:
+            raise Exception("Unknown source type!")
+    elif (var == 'int_fission_src'):
+      labelString = 'Integrated fission source (1/cm2-s)'
+      for chan in self.channels:
+        if chan.xCoord is not None:
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          random_tracer_name = list(chan.tracers.keys())[0]
+          src = chan.tracer_kernels[random_tracer_name][2].Q
+          vols = chan.vol_vec
+          if isinstance(src, ScalarField):
+            vals.append(np.sum(vols * src.T))
+          elif isinstance(src, float):
+            vals.append(np.sum(vols*src))
+          elif isinstance(src, np.ndarray):
+            vals.append(np.sum(src*vols))
+          else:
+            raise Exception("Unknown source type!")
+
+    else:
+      raise Exception("Unknown variable to plot")
+
+    # normalization
+    if cmap_minmax == 'default':
+      norm = colors.Normalize(vmin=min(vals), vmax=max(vals))
+    elif len(cmap_minmax) == 2:
+      norm = colors.Normalize(vmin=cmap_minmax[0], vmax=cmap_minmax[1])
+    else:
+      raise Exception("cmap_minmax must be default or a vector that is 2 long")
+
+    cmap = plt.get_cmap(cmap_name)
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+
+    # make figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for idx, val in enumerate(vals):
+      color = cmap(norm(val))
+      # shp = Circle((x[idx], y[idx]), radius=radius, facecolor=color, edgecolor='black', linewidth=0.5)
+      shp = Rectangle((x[idx] - radius, y[idx]-radius), width=radius*2, height=radius*2,
+                      facecolor=color, edgecolor='black', linewidth=0.5)
+
+      ax.add_patch(shp)
+
+    # limits
+    ax.set_aspect('equal')
+    ax.set_xlim(min(x) - 1, max(x) + 1)
+    ax.set_ylim(min(y) - 1, max(y) + 1)
+
+    # colorbar
+    cbar = plt.colorbar(sm, ax=ax)
+    if cmap_label == 'default':
+      cbar.set_label(labelString, fontsize=cmap_fontsize)
+    else:
+      cbar.set_label(cmap_label, fontsize=cmap_fontsize)
+
+    # labels
+    ax.set_xlabel(x_label, fontsize=cmap_fontsize)
+    ax.set_ylabel(y_label, fontsize=cmap_fontsize)
+
+    # show plot
+    plt.show()
 
 class ChannelInterface:
   """
