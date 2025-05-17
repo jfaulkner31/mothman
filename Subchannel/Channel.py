@@ -363,7 +363,7 @@ class Channel:
         self.A_momentum[cid,cid-1] = -1.0*area
 
       # compute friction factor
-      Reynolds = self.mdot.T[cid] * self.Dh * self.rho.T[cid] / self.fluid.get_mu()
+      Reynolds = (self.mdot.T[cid] / self.area / self.rho.T[cid]) * self.Dh * self.rho.T[cid] / self.fluid.get_mu()
       _fric = self.get_friction_factor(Reynolds=Reynolds)
       # add form loss coeffs to friction factor if entry or exit conditions.
       if cid == 0:
@@ -561,7 +561,10 @@ class ChannelArray:
     # HANDLING THERMAL HYDRAULIC BOUNDARY CONDITIONS
     if th_bool:
       self.mdot_bc = mdot_bc # TOTAL mass flow rate across all coupled channels
+
       self.set_array_mdot_by_channel() # updates mdot by channel
+      self.max_channel_mdot_diff = 1.0 # reset mdot diff
+
       self.pressure_bc = pressure_bc # pressure value
       self.T_bc = T_bc # advected temperature value
       self.h_bc = self.fluid.props_from_P_T(P=self.pressure_bc, T=self.T_bc, prop='h')
@@ -629,7 +632,7 @@ class ChannelArray:
     """
     Solves thermal hydraulics for each channel in the array.
     """
-
+    ### PRESSURE COUPLED CHANNEL ARRAY ###
     if self.coupling_method == 'pressure_method':
       print("Now converging channel arrays ...")
       diff = 1.0
@@ -641,6 +644,9 @@ class ChannelArray:
         for ch in self.channels:
           ch.solve_channel_TH(_dt=_dt)
       print("\tSolved channel coupling")
+      self.max_channel_mdot_diff = 1.0 # reset after solving!
+
+    ### RATIO METHOD ###
     elif self.coupling_method == 'ratio_method':
       self.update_mdots() # update mass flow rates in the channels.
       for ch in self.channels:
@@ -744,7 +750,13 @@ class ChannelArray:
           top = (self.mdot_by_channel[idx] - self.mdot_by_channel_PREVIOUS[idx])
           bottom = (this_dp - this_dp_old)
           top_2 = (dp_bar - this_dp)
-          mdot_by_channel[idx] = self.mdot_relaxation * top*top_2 / bottom + self.mdot_by_channel[idx]
+
+          if abs(bottom) < 1e-15: # divide by zero exception
+            mdot_by_channel[idx] = self.mdot_by_channel[idx]
+          else: # otherwise use formula as normal
+            mdot_by_channel[idx] = self.mdot_relaxation * top*top_2 / bottom + self.mdot_by_channel[idx]
+
+
 
         # NORMALIZE VALUES #
         mdot_by_channel = self.normalize_vector(normalize_to=self.mdot_bc, vec=mdot_by_channel)
@@ -795,12 +807,18 @@ class ChannelArray:
     for idx, ch in enumerate(self.channels):
       ch.mdot_bc = self.mdot_by_channel[idx]
 
-  # GET CHANNEL RESIDENCE TIME
+  # GET CHANNEL INFORMATION
   def get_channel_residence_time(self):
     tau = 0.0
     for ch in self.channels:
       tau += ch.get_channel_residence_time()
     return tau / len(self.channels)
+
+  def get_channel_tracer_sources(self, tracer_name: str):
+    sources = []
+    for ch in self.channels:
+      sources.append(ch.tracer_kernels[tracer_name][2].Q)
+    return sources
 
   ### UPDATING OLD TO NEW VALUES
   def update_old_to_most_recent(self):
@@ -840,6 +858,13 @@ class ChannelArray:
           x.append(chan.xCoord)
           y.append(chan.yCoord)
           vals.append(chan.mdot.T[zNode])
+    elif (var == 'temp') | (var == 'T') | (var == 'temperature'):
+      labelString = 'Temperature (K)'
+      for chan in self.channels:
+        if chan.xCoord is not None: # xy pair already set.
+          x.append(chan.xCoord)
+          y.append(chan.yCoord)
+          vals.append(chan.temp.T[zNode])
     elif (var == 'exit_loss'):
       labelString = 'Exit loss coefficient (-)'
       for chan in  self.channels:
@@ -931,6 +956,7 @@ class ChannelArray:
 
     # show plot
     plt.show()
+
 
 class ChannelInterface:
   """
