@@ -1,6 +1,9 @@
 # NUMPY
 import numpy as np
 
+# PANDAS
+import csv
+
 # MOTHMAN
 from .FluidRelation import FluidRelation
 from Meshing.Meshing import *
@@ -830,7 +833,7 @@ class ChannelArray:
     for ch in self.channels:
       ch.save_data(_t=_t)
 
-  ### PLOTTING STUFF
+  ### PLOTTING STUFF / DUMPING DATA
   def plot_map(self, zNode: int, var: str, figsize: tuple, radius: float,
                cmap_label: str, cmap_fontsize=15, cmap_name='RdBu_r', x_label='X (cm)', y_label='Y (cm)',
                cmap_minmax='default'):
@@ -956,6 +959,41 @@ class ChannelArray:
 
     # show plot
     plt.show()
+
+  def channelwise_data_to_csv(self, data_type: str, tracer_name='NONE', filename: str):
+    """
+      Converts channelwise data to a csv file.
+    """
+    arr = np.array([])
+
+    # ITERATE THROUGH CHANNELS GETTING DATA ALONG THE WAY
+    for ch in self.channels:
+      if data_type == 'mdot':
+        this = ch.mdot.T
+      elif (data_type == 'temperature') | (data_type == 'temp') | (data_type == 'T'):
+        this = ch.temp.T
+      elif data_type == 'fsrc':
+        if tracer_name in ch.tracers.keys():
+          this = ch.tracer_kernels[tracer_name][2].Q
+        else:
+          raise Exception("Tracer name not found in keys!")
+      elif data_type == 'pressure':
+        this = ch.pressure.T
+      elif (data_type == 'h') | (data_type == 'enthalpy'):
+        this = ch.h.T
+      elif (data_type == 'rho') | (data_type == 'density'):
+        this = ch.rho.T
+      else:
+        raise Exception("Unknown data type requested for turning into a csv")
+
+      # APPEND DATA TO THE ARRAY
+      try:
+        arr = np.vstack([arr, this])
+      except:
+        arr = this
+
+    # SAVE DATA TO A CSV
+    np.savetxt(filename, arr, delimiter=',', fmt='%d')
 
 
 class ChannelInterface:
