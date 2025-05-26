@@ -960,7 +960,7 @@ class ChannelArray:
     # show plot
     plt.show()
 
-  def channelwise_data_to_csv(self, data_type: str, tracer_name='NONE', filename: str):
+  def channelwise_data_to_csv(self, data_type: str, filename: str, tracer_name='NONE'):
     """
       Converts channelwise data to a csv file.
     """
@@ -993,7 +993,7 @@ class ChannelArray:
         arr = this
 
     # SAVE DATA TO A CSV
-    np.savetxt(filename, arr, delimiter=',', fmt='%d')
+    np.savetxt(filename, np.transpose(arr), delimiter=',')
 
 
 class ChannelInterface:
