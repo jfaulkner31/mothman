@@ -235,6 +235,9 @@ class Channel:
     else:
       self.heat_source = heat_source # if heat source is a list
 
+    if len(self.heat_source) != self.nZones:
+      raise Exception("Heat source is not the same length as the number of zones!!!")
+
   # SET ANNULUS PARAMETERS
   def set_annulus_parameters(self, Rout: float, Rin: float):
     """
@@ -656,6 +659,7 @@ class ChannelArray:
         ch.solve_channel_TH(_dt=_dt)
     else:
       raise Exception("Method not yet added for solve_channel_TH()")
+
   ### TRACERS
   def solve_tracer(self, name: str, _dt: float):
     """
@@ -994,6 +998,136 @@ class ChannelArray:
 
     # SAVE DATA TO A CSV
     np.savetxt(filename, np.transpose(arr), delimiter=',')
+
+  ### HOMOGENIZING MANY CHANNELS INTO A SINGLE LARGER CHANNEL
+  def homogenize_channel(self, ch_idxs: list, do_tracers: bool):
+    """
+    Homogenizes a channel based on many channels in this array and returns a single channel.
+
+    Inputs:
+      ch_idxs: Channel indexes to homogenize as part of self.channels
+      do_tracers: bool whether or not we want to add tracers to this channel.
+
+    Outputs:
+      A single Channel() homogenized based on data from the input.
+      Some notes:
+      - dH is the average hydraulic diameter
+      - area is the sum of all areas (thus volume is also the sum of all volumes)
+      - new heat sources and tracer sources are just integrated and renorm'd according to volume.
+        S = SUM_ch [ int(S * dV)_ch ] / SUM_ch [int(dV)_ch]
+
+    """
+
+    # Number of channels
+    nChannels = len(ch_idxs)
+
+    # Things to steal from channel idx 0
+    _fluid = self.channels[0].fluid
+    _gravity = self.channels[0].gravity
+    _temp_tol = self.channels[0].temp_tolerance
+    _max_temp_it = self.channels[0].max_temp_iterations
+    _nZones = self.channels[0].nZones
+    _L0 = self.channels[0].L0
+    _L1 = self.channels[0].L1
+    _pressure_bc = self.pressure_bc
+    _T_bc = self.T_bc
+    _fric = self.channels[0].fric
+
+    # Things to sum up and/or average
+    _Dh = 0.0
+    _area = 0.0
+    _mdot_bc = 0.0
+    _total_vol_vec = np.zeros(_nZones)
+    _heat_source = np.zeros(_nZones)
+
+
+
+
+    for idx in ch_idxs:
+      # Get channel as specified by the index.
+      this = self.channels[idx]
+      _Dh += this.Dh
+      _area += this.area
+      _mdot_bc += this.mdot_bc
+      _total_vol_vec += this.vol_vec
+      _heat_source += this.heat_source * this.vol_vec # Q(r) * V(r)
+
+
+
+    # normalize heat source to volume
+    _heat_source = _heat_source / _total_vol_vec
+
+    new_channel = Channel(gravity=_gravity,
+                  Dh=_Dh/nChannels,
+                  area=_area,
+                  temp_tolerance=_temp_tol,
+                  max_temp_iterations=_max_temp_it,
+                  nZones=_nZones,
+                  L0=_L0,
+                  L1=_L1,
+                  fluid=_fluid,
+                  pressure_bc=_pressure_bc,
+                  T_bc=_T_bc,
+                  mdot_bc=_mdot_bc,
+                  fric=_fric,
+                  heat_source=_heat_source)
+
+    # Add tracers to channels (optional)
+    if do_tracers:
+      tracer_names = list(self.channels[0].tracers.keys())
+
+      for name in tracer_names:
+        scheme = self.channels[0].tracer_kernels[name][0].scheme
+        lam = self.channels[0].tracer_kernels[name][1].lam
+        phi_bc = self.channels[0].tracer_bcs[name][0].phi
+        rho = self.channels[0].tracer_kernels[name][0].rho
+        beta = self.channels[0].tracer_kernels[name][2].beta
+
+        # GET SOURCE TIMES VOL
+        sourceTimesVol = np.zeros(_nZones)
+        for this_idx in ch_idxs:
+          # SCALAR FIELD SOURCE
+          _this_Q =  self.channels[this_idx].tracer_kernels[name][2].Q
+          _this_vol = self.channels[this_idx].vol_vec
+          if isinstance(_this_Q, ScalarField):
+            sourceTimesVol += (_this_Q.T * _this_vol)
+
+          # NP ARRAY SOURCE
+          elif isinstance(_this_Q, np.ndarray):
+            sourceTimesVol += (_this_Q * _this_vol)
+
+          # FLOAT SOURCE
+          elif isinstance(_this_Q, float):
+           sourceTimesVol += ( np.ones(_nZones) * _this_Q * _this_vol)
+
+        source = sourceTimesVol / _total_vol_vec
+
+        new_channel.add_tracer_to_channel(name=name,
+                                          initial_value=0.0,
+                                          scheme=scheme,
+                                          decay_const=lam,
+                                          boundary='lower',
+                                          phi=phi_bc,
+                                          rho=rho,
+                                          beta=beta,
+                                          source=copy.deepcopy(source))
+
+    return new_channel
+
+# gravity=gravity,
+# Dh=Dh,
+# area=area,
+# temp_tolerance=temp_tolerance,
+# max_temp_iterations=max_temp_iterations,
+# nZones=nZones,
+# L0=L0,
+# L1=L1,
+# fluid=fluid,
+# pressure_bc=pressure_bc,
+# T_bc=T_bc,
+# mdot_bc=1.0,
+# fric=fric,
+# heat_source=heat_source
 
 
 class ChannelInterface:
