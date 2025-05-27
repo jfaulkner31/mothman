@@ -412,6 +412,67 @@ class ExplicitSourceKernel(Kernel):
       else:
         raise Exception("Unknown ExplicitSource type for self.Q")
 
+  def get_integrated_source(self):
+    """
+    Returns int(self.Q * dV)
+    """
+    out = 0.0
+    v_total = 0.0
+    # if it is just a float --
+    if isinstance(self.Q, float):
+      for cid in self.mesh.cidList:
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q
+        v_total += _v
+
+    elif isinstance(self.Q, np.ndarray):
+      for cid in self.mesh.cidList:
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q[cid]
+        v_total += _v
+
+    elif isinstance(self.Q, Field):
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q.T[cid]
+        v_total += _v
+
+    else:
+      raise ValueError("Q type must be np array, float, or a Field for explicit source kernel")
+
+    return out
+
+  def get_averaged_src_density(self):
+    """
+    Gets averaged source density ---
+    int(self.Q * dV) / int(dV)
+    """
+    out = 0.0
+    v_total = 0.0
+    # if it is just a float --
+    if isinstance(self.Q, float):
+      for cid in self.mesh.cidList:
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q
+        v_total += _v
+
+    elif isinstance(self.Q, np.ndarray):
+      for cid in self.mesh.cidList:
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q[cid]
+        v_total += _v
+
+    elif isinstance(self.Q, Field):
+        _v = self.mesh.cells[cid].vol
+        out += _v * self.Q.T[cid]
+        v_total += _v
+
+    else:
+      raise ValueError("Q type must be np array, float, or a Field for explicit source kernel")
+
+    return out / v_total
+
+
+
 class FirstOrderEulerTimeKernel(Kernel):
   """
   First order explicit euler time scheme - VOL * RHO / DELTA_T * (PHI)

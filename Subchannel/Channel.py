@@ -18,6 +18,9 @@ import matplotlib.cm as cm
 import matplotlib.colors as colors
 from matplotlib.patches import Rectangle
 
+# PICKLE
+import pickle as pkl
+
 class Channel:
   def __init__(self, gravity: float,
                Dh: float,
@@ -507,6 +510,33 @@ class Channel:
     """
     self.entry_form_loss = inlet
     self.exit_form_loss = outlet
+
+  def integrate_tracer_source(self, tracer_name: str):
+    """
+    Returns int(F''' dV)
+    """
+    if tracer_name not in self.tracer_kernels.keys():
+      raise Exception("Tracer name not found!")
+    try:
+      return self.tracer_kernels[tracer_name][2].get_integrated_source()
+    except:
+      raise Exception("Idk what happened - see Kernels.Kernels.ExplicitSource")
+
+  def dump_channel_to_pkl(self, filename: str):
+    """
+    Dumps "self" to pkl file
+    """
+    if '.pkl' not in filename:
+      raise Exception(".pkl not found in filename.")
+    with open(filename, 'wb') as handle:
+      pkl.dump(self, handle, protocol=pkl.HIGHEST_PROTOCOL)
+
+  def import_from_pkl(filename: str):
+    """
+    Imports a channel object from a pkl file.
+    """
+    with open(filename, 'rb') as handle:
+      return pkl.load(handle)
 
 class ChannelArray:
   """
@@ -1011,7 +1041,7 @@ class ChannelArray:
     Outputs:
       A single Channel() homogenized based on data from the input.
       Some notes:
-      - dH is the average hydraulic diameter
+      - dH is the average hydraulic diameter (to better preserve frictional pressure loss)
       - area is the sum of all areas (thus volume is also the sum of all volumes)
       - new heat sources and tracer sources are just integrated and renorm'd according to volume.
         S = SUM_ch [ int(S * dV)_ch ] / SUM_ch [int(dV)_ch]
@@ -1021,7 +1051,7 @@ class ChannelArray:
     # Number of channels
     nChannels = len(ch_idxs)
 
-    # Things to steal from channel idx 0
+    # Things to steal from channel idx 0 (these should all be the same anyways in all channels...)
     _fluid = self.channels[0].fluid
     _gravity = self.channels[0].gravity
     _temp_tol = self.channels[0].temp_tolerance
@@ -1042,7 +1072,7 @@ class ChannelArray:
 
 
 
-
+    # iterate through some stuff and sum it up
     for idx in ch_idxs:
       # Get channel as specified by the index.
       this = self.channels[idx]
@@ -1113,21 +1143,6 @@ class ChannelArray:
                                           source=copy.deepcopy(source))
 
     return new_channel
-
-# gravity=gravity,
-# Dh=Dh,
-# area=area,
-# temp_tolerance=temp_tolerance,
-# max_temp_iterations=max_temp_iterations,
-# nZones=nZones,
-# L0=L0,
-# L1=L1,
-# fluid=fluid,
-# pressure_bc=pressure_bc,
-# T_bc=T_bc,
-# mdot_bc=1.0,
-# fric=fric,
-# heat_source=heat_source
 
 
 class ChannelInterface:
