@@ -1144,6 +1144,15 @@ class ChannelArray:
 
     return new_channel
 
+  def integrate_tracer_source(self, tracer_name: str):
+    """
+    Integrates sum(F''' * V)_all_channels
+    """
+    out = 0.0
+    for this in self.channels:
+      out += this.integrate_tracer_source(tracer_name=tracer_name)
+
+    return out
 
 class ChannelInterface:
   """
