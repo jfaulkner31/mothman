@@ -499,6 +499,12 @@ class Channel:
     """
     return self.channel_conditions['dP']
 
+  def get_channel_tracer_sources(self, tracer_name: str):
+    """
+    Returns source for the given channel tracer as a list
+    """
+    return self.tracer_kernels[tracer_name][2].Q
+
   def set_xy(self, x: float, y: float):
     self.xCoord = x
     self.yCoord = y
