@@ -20,5 +20,9 @@ class FluidRelation:
   def props_from_P_T(self, P:float, T:float, prop: str):
     if prop == 'h':
       return self.cp*T
+    elif prop == 'rho':
+      return self.rho_0 + self.drho_dT * T
+    else:
+      raise Exception("Desired prop not found!")
   def get_mu(self):
     return self.mu
