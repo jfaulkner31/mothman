@@ -1,7 +1,8 @@
-from Subchannel.FluidRelation import FluidRelation
-
 """
 Put user inputs here...
+
+Automatically adjusts length of channel to match desired flow tau value (to match residence time in the main part of the core.)
+
 """
 ### USER INPUTS ###
 TEMP = 900.0
@@ -52,6 +53,7 @@ Now doing calculations....
 """
 print("NOW RUNNING MSRE DATA USER INPUT")
 ### CALCULATIONS ###
+from Subchannel.FluidRelation import FluidRelation
 FUEL_FLUID = FluidRelation(cp=CP_FUEL, mu=MU_FUEL, k=K_FUEL, rho_0 = RHO_0_FUEL, drho_dT=DRHO_DT_FUEL)
 density = FUEL_FLUID.props_from_P_T(P=101325.0, T=TEMP, prop='rho')
 
