@@ -1,6 +1,13 @@
 """
 This file is meant to model the MSRE startup transient
 but with a modified bypass flow rate.
+
+Runs through command line and saves results based on user input: startup_bypass_modified_flowrate_<PERCENT>_percent.pkl
+
+
+Run this file using the following:
+python startup_8channel_variable_bypass.py <PERCENT>
+where <PERCENT> is the percent of flow that goes to the bypass flow channel.
 """
 
 import openmc
@@ -38,7 +45,7 @@ print(f"Script name: {sys.argv[0]}")
 print("BYPASS FLOW RATIO IS (%):", PERCENT)
 
 # OUTPUT FILENAME
-OUTPUT_FILENAME = "Results/ANS_2025/coastdown_bypass_modified_flowrate_"+str(PERCENT)+"_percent"+".pkl"
+OUTPUT_FILENAME = "Results/ANS_2025/startup_bypass_modified_flowrate_"+str(PERCENT)+"_percent"+".pkl"
 
 # FLUID
 fluid = msre_data_dict['fluid']
