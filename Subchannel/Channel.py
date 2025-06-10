@@ -876,7 +876,7 @@ class ChannelArray:
   ### PLOTTING STUFF / DUMPING DATA
   def plot_map(self, zNode: int, var: str, figsize: tuple, radius: float,
                cmap_label: str, cmap_fontsize=15, cmap_name='RdBu_r', x_label='X (cm)', y_label='Y (cm)',
-               cmap_minmax='default'):
+               cmap_minmax='default', ):
     """
     Plots a channel by channel map of the chosen variable.
     Only plots stuff that has an x and a y value -- all others are ignored.
@@ -983,8 +983,8 @@ class ChannelArray:
 
     # limits
     ax.set_aspect('equal')
-    ax.set_xlim(min(x) - 1, max(x) + 1)
-    ax.set_ylim(min(y) - 1, max(y) + 1)
+    ax.set_xlim(min(x) - 10, max(x) + 10)
+    ax.set_ylim(min(y) - 10, max(y) + 10)
 
     # colorbar
     cbar = plt.colorbar(sm, ax=ax)
