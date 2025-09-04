@@ -456,6 +456,7 @@ class Channel:
       val_vec.append(self.tracer_dict[name][t][pos])
     return np.array(t_vec), np.array(val_vec)
 
+  # RETURNS FIELD AS A FUNCTION OF TIME AT INDEX POS
   def get_field_vs_time(self, name: str, pos: int):
     """
     Returns a field given a field name and the desired channel index as a function of time.
@@ -482,6 +483,7 @@ class Channel:
       val_vec.append(this_d[t][pos])
     return np.array(t_vec), np.array(val_vec)
 
+  # RETURNS CHANNEL RESIDENCE TIME BASED ON VELOCITIES
   def get_channel_residence_time(self):
     """
       Retrieves time spent in channel by the fluid.
@@ -493,22 +495,26 @@ class Channel:
       tau += self.mesh.cells[cid].dz / (self.mdot.T[cid] / self.rho.T[cid] / self.area)
     return tau
 
+  # GETS DELTA P FROM BOTTOM TO TOP
   def get_dp(self):
     """
     Gets pressure drop from top to bottom.
     """
     return self.channel_conditions['dP']
 
+  # RETURNS SOURCE USED FOR TRACERS
   def get_channel_tracer_sources(self, tracer_name: str):
     """
     Returns source for the given channel tracer as a list
     """
     return self.tracer_kernels[tracer_name][2].Q
 
+  # SETS X AND Y COORDS OF THE CHANNEL WHEN NEEDED
   def set_xy(self, x: float, y: float):
     self.xCoord = x
     self.yCoord = y
 
+  # SETS A FORM LOSS COEFF FOR THE INLET AND OUTLETS
   def set_form_loss_coeffs(self, inlet: float, outlet: float):
     """
     Sets values of K - form loss coefficients - for channel exit and entry.
@@ -517,6 +523,7 @@ class Channel:
     self.entry_form_loss = inlet
     self.exit_form_loss = outlet
 
+  # Returns int(F''' dV)
   def integrate_tracer_source(self, tracer_name: str):
     """
     Returns int(F''' dV)
@@ -528,6 +535,7 @@ class Channel:
     except:
       raise Exception("Idk what happened - see Kernels.Kernels.ExplicitSource")
 
+  # EXPORTS CHANNEL TO A PICKLE FILE
   def dump_channel_to_pkl(self, filename: str):
     """
     Dumps "self" to pkl file
@@ -537,6 +545,7 @@ class Channel:
     with open(filename, 'wb') as handle:
       pkl.dump(self, handle, protocol=pkl.HIGHEST_PROTOCOL)
 
+  # IMPORTS CHANNEL FROM A PICKLE FILE
   def import_from_pkl(filename: str):
     """
     Imports a channel object from a pkl file.
@@ -875,8 +884,13 @@ class ChannelArray:
 
   ### PLOTTING STUFF / DUMPING DATA
   def plot_map(self, zNode: int, var: str, figsize: tuple, radius: float,
-               cmap_label: str, cmap_fontsize=15, cmap_name='RdBu_r', x_label='X (cm)', y_label='Y (cm)',
-               cmap_minmax='default', ):
+               cmap_label: str,
+               cbar_hori_vert='horizontal',
+               cbar_shrink=1.0,
+               cmap_fontsize=15, cmap_name='RdBu_r', x_label='X (cm)', y_label='Y (cm)',
+               cmap_minmax='default',
+               dpi=250
+               ):
     """
     Plots a channel by channel map of the chosen variable.
     Only plots stuff that has an x and a y value -- all others are ignored.
@@ -891,6 +905,11 @@ class ChannelArray:
       x_label: str
       y_label: str
     """
+    if ('horizontal' == cbar_hori_vert) | ('vertical' == cbar_hori_vert):
+      pass
+    else:
+      raise ValueError("cbar_hori_vert must be either 'hor' or 'vert'")
+
     x = []
     y = []
     vals = []
@@ -971,7 +990,7 @@ class ChannelArray:
     sm = cm.ScalarMappable(norm=norm, cmap=cmap)
 
     # make figure
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
     for idx, val in enumerate(vals):
       color = cmap(norm(val))
@@ -987,7 +1006,7 @@ class ChannelArray:
     ax.set_ylim(min(y) - 10, max(y) + 10)
 
     # colorbar
-    cbar = plt.colorbar(sm, ax=ax)
+    cbar = plt.colorbar(sm, ax=ax, orientation=cbar_hori_vert, shrink=cbar_shrink)
     if cmap_label == 'default':
       cbar.set_label(labelString, fontsize=cmap_fontsize)
     else:
@@ -996,6 +1015,9 @@ class ChannelArray:
     # labels
     ax.set_xlabel(x_label, fontsize=cmap_fontsize)
     ax.set_ylabel(y_label, fontsize=cmap_fontsize)
+
+    # Shrink colorbar
+    color
 
     # show plot
     plt.show()
