@@ -17,3 +17,5 @@ OpenMC/*.h5*
 # pixi environments ignores
 .pixi/*
 !.pixi/config.toml
+pick.lock
+pixi.toml

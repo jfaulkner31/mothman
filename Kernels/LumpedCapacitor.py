@@ -108,7 +108,6 @@ class ChannelTempLinker(BulkObjectHelper):
   def get_htc(self) -> None:
     raise Exception("method not yet implemented!!")
 
-
 class LumpedCapacitor:
   """
   Serves as a lumped capacitor for heat transfer:
