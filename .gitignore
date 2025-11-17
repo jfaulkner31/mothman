@@ -1,3 +1,4 @@
+# Mothman related ignores
 /*/__pycache__/*
 /*/__pycache__
 /*/__pycache__/
@@ -9,3 +10,10 @@ OpenMC/*.h5
 /OpenMC/*.h5*
 OpenMC/*.h5*
 */plot_settings.pkl
+
+# ignore vscode garbage
+.vscode
+
+# pixi environments ignores
+.pixi/*
+!.pixi/config.toml

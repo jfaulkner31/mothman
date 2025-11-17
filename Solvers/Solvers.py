@@ -15,6 +15,7 @@ class BasicSolver():
     self.field = field
     self.A = self.kernels[0].aC * 0.0
     self.b = self.kernels[0].b * 0.0
+
   def solve(self, _dt: float):
     self.A *= 0.0
     self.b *= 0.0

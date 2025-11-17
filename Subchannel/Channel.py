@@ -36,6 +36,36 @@ class Channel:
                mdot_bc: float,
                fric: str,
                heat_source: list | float):
+    """
+    gravity : float
+      gravity value
+    Dh : float
+      hydraulic diameter
+    area : float
+      channel area
+    temp_tolerance : float
+      TODO
+    max_temp_iterations : int
+      TODO
+    nZones : int
+      number of mesh zones
+    L0 : float
+      height 0
+    L1 : float
+      height 1
+    fluid : FluidRelation
+      fluid relation to use
+    pressure_bc : float
+      pressure boundary condition at inlet
+    T_bc : float
+      temperature inlet
+    mdot_bc : float
+      entering mdot
+    fric : str
+      friction relation type - see self.get_friction_factor()
+    heat_source : list | float
+      heat source in the channel to use - either list the size of nZones or a single float value
+    """
     # Initial data that remains constant for this channel during the simulation.
     self.gravity = gravity
     self.Dh = Dh
@@ -1182,6 +1212,11 @@ class ChannelArray:
 
     return out
 
+
+######################
+# Channel interfaces #
+######################
+
 class ChannelInterface:
   """
   Class that serves as an interface between two channels.
@@ -1194,6 +1229,8 @@ class ChannelInterface:
 
   Ch1 is the outputting channel.
   Ch2 is the receiving channel.
+
+  ChannelInterface.update_interface_conditions() can be used to call the pass between the channels.
   """
   def __init__(self, ch1, ch2):
     # Channels

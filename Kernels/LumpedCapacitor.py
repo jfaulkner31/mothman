@@ -3,10 +3,14 @@ from Fields.Fields import *
 from Kernels.Kernels import *
 import matplotlib.pyplot as plt
 from copy import deepcopy
+from Subchannel.Channel import *
 
 class LumpedMaterialProperty:
   """
   Class that serves as a way to evaluate thermal properties.
+
+  This class does not ever hold field or solution data, it should
+  in theory be usable across as many materials / objects as possible.
 
   name: material property name
 
@@ -14,14 +18,29 @@ class LumpedMaterialProperty:
   fc[0] + fc[1]*x + fc[2]*x^2 + fc[3]*x^3 ...
   """
   def __init__(self, name: str, function_coeffs: list | np.ndarray):
-    self.fc = function_coeffs
-    self.name = name
+    # Basic stuff
+    self.fc = function_coeffs # coeffs for polynomial
+    self.name = name # name of variable
+    if (len(self.fc) == 1):
+      self._is_constant = True
+    else:
+      self._is_constant = False
+
+    # Setup derivatives
+    self.dc = np.zeros(len(self.fc)) # derivative coeffs [0 + 1*fc[1] + 2*fc[2]*x + 3*fc[3]*x^2 + ...]
+    self._get_derivatives()
+
+  def _get_derivatives(self) -> None:
+    # Get derivatives
+    for idx, term in enumerate(self.fc):
+      self.dc = idx * self.fc[0]
+
 
   def explicit_eval(self, x: float | np.ndarray):
     """
     Input x and returns material property value based on function coeffs.
     """
-    if isinstance(x, float):
+    if isinstance(x, float) | isinstance(x, int):
       power = 0.0
       result = 0.0
       for this in self.fc:
@@ -39,7 +58,8 @@ class LumpedMaterialProperty:
 
     else:
       raise TypeError("x input is wrong type!")
-  def plot_prop(self, xMin: float, xMax: float):
+
+  def plot_prop(self, xMin: float, xMax: float) -> None:
     xRange = np.linspace(xMin,xMax, 1000)
     y = self.explicit_eval(x=xRange)
     ax = plt.figure()
@@ -48,23 +68,80 @@ class LumpedMaterialProperty:
     plt.xlabel('x', fontsize=15)
     plt.ylabel(self.name, fontsize=15)
     plt.grid()
-    return ax
+    # return ax
+
+  def is_constant(self) -> bool:
+    return self._is_constant
+
+class BulkObjectHelper:
+  """
+  Object representing some bulk fluid with some temeperature value.
+  Not meant to be used as a class - make subclasses of this guy instead
+  where each has different implementations for grabbing the current
+  temperature value.
+
+  Really just a class added to LumpedCapacitory
+  to conveniently pass information from channel objects.
+  """
+  def __init__(self):
+    pass
+  def get_T():
+    pass
+  def get_T_old():
+    pass
+  def get_htc(self) -> None:
+    raise Exception("method not yet implemented!!")
+
+class ChannelTempLinker(BulkObjectHelper):
+  """
+  Subchannel node bulk object that will retrieve
+  temperature values from a Channel
+  """
+  def __init__(self, node_index: int, ch: Channel):
+    self.ch = ch
+    self.idx = node_index
+
+  def get_T(self) -> float:
+    return self.ch.temp.T
+  def get_T_old(self) -> float:
+    return self.ch.temp.T_old
+  def get_htc(self) -> None:
+    raise Exception("method not yet implemented!!")
 
 
 class LumpedCapacitor:
   """
   Serves as a lumped capacitor for heat transfer:
+
+  Params
+  ======
+  mass : float
+    mass in kg
+  power : float
+    power in W
+  A : float
+    heat transfer area to fluid in m2
+  L : length
+    unit length in m
+  C : float | LumpedMaterialProperty
+    specific heat in J/kg/K
+  thermal_cond : float | LumpedMaterialProperty
+    thermal conductivity of solid
+  initial_T : float
+    initial condition in K
+  T_bulk : float
+    bulk temperature of fluid
+  epsilon : float
+    convergence tolerance in K
+
+  Physics
+  =======
   dT/dt = P/m/C + h*A/m/C * (T_bulk - T)
-  T = solid temperature (solving for)
-  P = power (W)
-  m = mass (kg)
-  C = specific heat (J/kg/K)
-  A = heat transfer area to fluid
   """
   def __init__(self, mass: float, power: float, h: float, A: float, L: float,
                C: float | LumpedMaterialProperty, thermal_cond: float | LumpedMaterialProperty,
                initial_T: float,
-               T_bulk: float,
+               T_bulk: float | BulkObjectHelper,
                epsilon: float):
     self.mass = mass
     self.power = power
@@ -82,27 +159,40 @@ class LumpedCapacitor:
 
   def solve(self, _dt: float):
     """
-    Solves.
+    Solves
+
+    T_next = k+1
+    self.T = k
+    T_old  = k-1
     """
+    T_bulk = None
+    # Determine how we are getting the bulk temperature
+    if isinstance(self.T_bulk, float) | isinstance(self.T_bulk, int):
+      T_bulk = float(self.T_bulk)
+    elif isinstance(self.T_bulk, BulkObjectHelper):
+      T_bulk = self.T_bulk.get_T()
+
+    # If it is a lumped material property.
     if isinstance(self.C, LumpedMaterialProperty):
       C = self.C.explicit_eval(self.T)
-      iterate = True
+      iterate = not self.C.is_constant()
     else:
       C = self.C
       iterate = False
+    iterate = True
 
     if iterate:
       diff = 1e321
       T_next_prev_guess = 1e321
       while (diff > self.epsilon):
         T_next = self.T + _dt * (
-          self.P / self.mass / C + self.h*self.A / self.mass / C * (self.T_bulk - self.T)
+          self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
         )
         diff = np.abs(T_next - T_next_prev_guess)
         T_next_prev_guess = T_next
     else:
       T_next = self.T + _dt * (
-        self.P / self.mass / C + self.h*self.A / self.mass / C * (self.T_bulk - self.T)
+        self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
       )
 
     # Save old and new T
@@ -117,13 +207,13 @@ class LumpedCapacitor:
     """
     return self.A * self.h * (self.T_bulk - self.T)
 
-  def set_power(self, power: float):
+  def set_power(self, power: float | BulkObjectHelper):
     self.power = power
 
-  def set_htc(self, h: float):
+  def set_htc(self, h: float | BulkObjectHelper):
     self.h = h
 
-  def set_T_bulk(self, T_bulk: float):
+  def set_T_bulk(self, T_bulk: float | BulkObjectHelper):
     self.T_bulk = T_bulk
 
   def update_thermal_props(self):
