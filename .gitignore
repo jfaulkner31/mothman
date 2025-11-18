@@ -5,12 +5,12 @@
 __pycache__/*
 __pycache__
 __pycache__/
-## /OpenMC/*.h5
-## OpenMC/*.h5
-## /OpenMC/*.h5*
-## OpenMC/*.h5*
+/OpenMC/*.h5
+OpenMC/*.h5
+/OpenMC/*.h5*
+OpenMC/*.h5*
 */plot_settings.pkl
-
+*/*.h5
 # ignore vscode garbage
 .vscode
 

@@ -3,7 +3,6 @@ from Fields.Fields import *
 from Kernels.Kernels import *
 import matplotlib.pyplot as plt
 from copy import deepcopy
-from Subchannel.Channel import *
 
 class LumpedMaterialProperty:
   """
@@ -73,42 +72,13 @@ class LumpedMaterialProperty:
   def is_constant(self) -> bool:
     return self._is_constant
 
-class BulkObjectHelper:
-  """
-  Object representing some bulk fluid with some temeperature value.
-  Not meant to be used as a class - make subclasses of this guy instead
-  where each has different implementations for grabbing the current
-  temperature value.
-
-  Really just a class added to LumpedCapacitory
-  to conveniently pass information from channel objects.
-  """
+class Conductor:
   def __init__(self):
     pass
-  def get_T():
+  def solve(self):
     pass
-  def get_T_old():
-    pass
-  def get_htc(self) -> None:
-    raise Exception("method not yet implemented!!")
 
-class ChannelTempLinker(BulkObjectHelper):
-  """
-  Subchannel node bulk object that will retrieve
-  temperature values from a Channel
-  """
-  def __init__(self, node_index: int, ch: Channel):
-    self.ch = ch
-    self.idx = node_index
-
-  def get_T(self) -> float:
-    return self.ch.temp.T
-  def get_T_old(self) -> float:
-    return self.ch.temp.T_old
-  def get_htc(self) -> None:
-    raise Exception("method not yet implemented!!")
-
-class LumpedCapacitor:
+class LumpedCapacitor(Conductor):
   """
   Serves as a lumped capacitor for heat transfer:
 
@@ -140,7 +110,7 @@ class LumpedCapacitor:
   def __init__(self, mass: float, power: float, h: float, A: float, L: float,
                C: float | LumpedMaterialProperty, thermal_cond: float | LumpedMaterialProperty,
                initial_T: float,
-               T_bulk: float | BulkObjectHelper,
+               T_bulk: float,
                epsilon: float):
     self.mass = mass
     self.power = power
@@ -168,8 +138,6 @@ class LumpedCapacitor:
     # Determine how we are getting the bulk temperature
     if isinstance(self.T_bulk, float) | isinstance(self.T_bulk, int):
       T_bulk = float(self.T_bulk)
-    elif isinstance(self.T_bulk, BulkObjectHelper):
-      T_bulk = self.T_bulk.get_T()
 
     # If it is a lumped material property.
     if isinstance(self.C, LumpedMaterialProperty):
@@ -178,25 +146,31 @@ class LumpedCapacitor:
     else:
       C = self.C
       iterate = False
-    iterate = True
 
     if iterate:
       diff = 1e321
       T_next_prev_guess = 1e321
       while (diff > self.epsilon):
-        T_next = self.T + _dt * (
+        # Double check tihs - specifically if self.T in the htc term should actually be
+        # part of T_next -> use the forward scheme or do we use the old value of T?
+        # or do we use T_old?
+        # Getting my T's mixed up a lot here.
+        T_next = self.T_old + _dt * (
           self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
         )
         diff = np.abs(T_next - T_next_prev_guess)
         T_next_prev_guess = T_next
     else:
-      T_next = self.T + _dt * (
+      T_next = self.T_old + _dt * (
         self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
       )
 
     # Save old and new T
-    self.T_old = copy.deepcopy(self.T)
+    #self.T_old = copy.deepcopy(self.T)
     self.T = T_next
+
+  def update_old_to_most_recent(self):
+    self.T_old = copy.deepcopy(self.T)
 
   def get_heat_flux(self):
     """
@@ -206,20 +180,23 @@ class LumpedCapacitor:
     """
     return self.A * self.h * (self.T_bulk - self.T)
 
-  def set_power(self, power: float | BulkObjectHelper):
+  def set_power(self, power: float):
     self.power = power
 
-  def set_htc(self, h: float | BulkObjectHelper):
+  def set_htc(self, h: float):
     self.h = h
 
-  def set_T_bulk(self, T_bulk: float | BulkObjectHelper):
+  def set_T_bulk(self, T_bulk: float):
     self.T_bulk = T_bulk
+
+  def set_fluid_vals(self, power: float, htc: float, T_bulk: float):
+    self.set_power(power=power)
+    self.set_htc(htc=htc)
+    self.set_T_bulk(T_bulk=T_bulk)
 
   def update_thermal_props(self):
     """
     Updates/sets thermal_cond or C values if they are LumpedMaterialProperty
     """
     pass
-
-
 

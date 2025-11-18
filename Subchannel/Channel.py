@@ -10,6 +10,7 @@ from Meshing.Meshing import *
 from Fields.Fields import *
 from Kernels.Kernels import *
 from Solvers.Solvers import *
+from Kernels.LumpedCapacitor import Conductor
 
 # MPL
 import matplotlib.pyplot as plt
@@ -80,6 +81,7 @@ class Channel:
     self.set_heat_source(nZones=nZones, heat_source=heat_source)
     self.xCoord = None
     self.yCoord = None
+    self.conductors: list[Conductor] = None
 
     # Make a mesh
     coords = np.linspace(L0,L1,self.nZones+1)
@@ -596,7 +598,7 @@ class ChannelArray:
     solve_all_tracers():
     add_tracer_to_channel():
   """
-  def __init__(self, channels: np.ndarray, coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation,
+  def __init__(self, channels: list[Channel], coupling_method: str, flow_ratios: np.ndarray, fluid: FluidRelation,
                mdot_relaxation=1.0, epsilon=1e-6):
     # channels is a np array of subchannels
     self.channels = channels
@@ -1211,6 +1213,31 @@ class ChannelArray:
       out += this.integrate_tracer_source(tracer_name=tracer_name)
 
     return out
+
+
+  ### EXPORTS CHANNEL TO A PICKLE FILE
+  def dump_channel_to_pkl(self, filename: str):
+    """
+    Dumps "self" to pkl file
+
+    filename : str
+      name of file to dump to
+
+    """
+    if '.pkl' not in filename:
+      raise Exception(".pkl not found in filename.")
+    with open(filename, 'wb') as handle:
+      pkl.dump(self, handle, protocol=pkl.HIGHEST_PROTOCOL)
+
+  ### IMPORTS CHANNEL FROM A PICKLE FILE
+  def import_from_pkl(filename: str):
+    """
+    Imports a channel object from a pkl file.
+    """
+    with open(filename, 'rb') as handle:
+      return pkl.load(handle)
+
+
 
 
 ######################
