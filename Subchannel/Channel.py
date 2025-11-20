@@ -11,6 +11,7 @@ from Fields.Fields import *
 from Kernels.Kernels import *
 from Solvers.Solvers import *
 from Kernels.LumpedCapacitor import Conductor
+from Kernels.NusseltModels import *
 
 # MPL
 import matplotlib.pyplot as plt
@@ -98,12 +99,13 @@ class Channel:
     # Set boundary conditions
     self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={}, tracer_bool=False, th_bool=True)
 
-    # Make some variables
+    # Make some variables -> pressure, mdot, enthalpy, density, temperature, htc
     self.pressure = ScalarField(name='P', initial_value=self.pressure_bc, mesh=self.mesh)
     self.mdot = ScalarField(name='mdot', initial_value=self.mdot_bc, mesh=self.mesh)
     self.h = ScalarField(name='enthalpy', initial_value=self.T_bc, mesh=self.mesh)
     self.rho = ScalarField(name='density', initial_value=self.rho_bc, mesh=self.mesh)
     self.temp = ScalarField(name='temp', initial_value=self.T_bc, mesh=self.mesh)
+    self.htc = ScalarField(name='htc', initial_value=-1, mesh=self.mesh)
 
     # Make a dictionary for those variables.
     self.pressure_dict = {}
@@ -144,12 +146,15 @@ class Channel:
 
     # Channel Tracers -> keys are tracer names
     self.tracers = {} # Field variable for tracers
-    self.tracer_kernels = {} # actual kernel objects for tracers
+    self.tracer_kernels = {} # actual kernel objects for tracers -> dict[name][Kernel]
     self.tracer_bcs = {} # actual BC objects for tracers
     self.tracer_bc_values = {} # name and value pairs for tracers [name] -> inlet bc value for this channel
     self.channel_conditions['tracers_in'] = {} # {} -> name and value pairs for inlet values and outlet values
     self.channel_conditions['tracers_out'] = {} #
     self.tracer_dict = {} # time dependent tracer dict -> tracer_dict[tracer_name][_t] -> vector of values for this tracer
+
+    # Other
+    self.nu_model: NusseltModel = BasicNusseltModel # Set as basic default -> requires manual setting by user.
 
   # SETUP A TRACER FOR THIS CHANNEL OBJECT
   def add_tracer_to_channel(self, name: str,
@@ -240,6 +245,11 @@ class Channel:
     # TRACER VARIABLES
     for name in self.tracers.keys():
       self.tracers[name].T_old = copy.deepcopy(self.tracers[name].T)
+
+    # CONDUCTORS
+    if len(self.conductors) > 0:
+      for conductor in self.conductors:
+        conductor.update_old_to_most_recent()
 
   # SAVES DEEPCOPY OF DATA FOR STORAGE/USE LATER
   def save_data(self, _t: float):
@@ -356,6 +366,8 @@ class Channel:
     ENERGY EQUATION AND SETUP
     """
     mesh = self.mesh
+
+    # Rester matrices
     self.A_energy *= 0.0
     self.b_energy *= 0.0
 
@@ -366,8 +378,11 @@ class Channel:
       # main diagonal
       self.A_energy[cid,cid] = area/_dt * self.rho.T[cid] + 1.0/dz * self.mdot.T[cid]
 
-      # Source term (heat source in W/m3 --> times Volume ---> divided by dz ---> = linear heat rate)
+      # Source term 1 (heat source in W/m3 --> times Volume ---> divided by dz ---> = linear heat rate)
       self.b_energy[cid] += self.heat_source[cid] * area*dz / dz
+
+      # Source term 2 heat flux from conductors
+      self._do_conductors_heat_source(cid=cid, dz=dz)
 
       # Time term for source
       self.b_energy[cid] += area/_dt * self.h.T_old[cid] * self.rho.T_old[cid]
@@ -378,8 +393,46 @@ class Channel:
       else:
         self.A_energy[cid,cid-1] = -1.0/dz * self.mdot.T[cid-1]
 
-    # SOLVE
+    # SOLVE FOR ENTHALPY
     self.h.T = np.linalg.solve(self.A_energy, self.b_energy)
+
+    # DO EOS NOW -> updates internal temperature values calling _solve_cond...()
+    self.solve_EOS()
+
+    # Conductor solver
+    self._solve_conductors_energy(_dt=_dt)
+
+
+  def _solve_conductors_energy(self, _dt: float):
+    if len(self.conductors) > 0:
+      for conductor in self.conductors:
+        conductor.solve(_dt=_dt)
+
+  def _do_conductors_heat_source(self, cid: int, dz: float):
+    if len(self.conductors) > 0:
+      # Nu = h*D/k
+      # htc = Nu*k/D
+      # Source term : htc * A_wall / dZ * (T - T_wall) -> htc * A_wall / dZ * (h/cp - T_wall)
+      #   Add to b (rhs)    : htc * A_wall / dZ * T_wall
+      #   Add to diag (lhs) : htc * A_wall / dZ / cp
+      # When all is done, make sure we use same value of T_fluid in each conductor and fluid
+      # AKA make sure heat flux flow is equal and balanced at each
+      _wall_area = self.conductors[cid].get_wall_area()
+      _wall_temp = self.conductors[cid].get_wall_temp()
+      if _wall_temp < 0.0:
+        raise Exception("Wall temp in conductor not set properly!")
+      _the_Nu   = self.nu_model.get_Nu()
+      _the_htc = _the_Nu * self.fluid.get_k() / self.Dh
+      self.htc.T[cid] = _the_htc # updates internal htc field to most recent value.
+
+      # Add terms to energy equation
+      # units on b are: W/m -> W/m2/K * m2 / m * K = W/m
+      # units on the D term are kg/s/m * ENTHALPY = W/m2-K * m2 / m / J/kg-K = J/s-K-m * kg-K/J = kg/s/m
+      # enthalpy / cp = temp.
+      the_b_term =        _the_htc * _wall_area / dz * _wall_temp
+      the_D_term =        _the_htc * _wall_area / dz / self.fluid.cp
+      self.A_energy[cid,cid] += the_D_term
+      self.b_energy[cid] += the_b_term
 
   # PRESSURE EQUATION
   def solve_pressure_equation(self, _dt: float):
@@ -430,8 +483,11 @@ class Channel:
       rho_updated = np.append(rho_updated, self.fluid.props_from_P_H(P=self.pressure.T[cid], enthalpy=self.h.T[cid], prop='rho') )
 
     max_diff = np.max(np.abs(self.temp.T - temp_updated))
-    self.temp.T = temp_updated
-    self.rho.T = rho_updated
+
+    # Now update the values in temp and rho
+    self.temp.set_T(temp_updated)
+    self.rho.set_T(rho_updated)
+
     return max_diff
 
   # UPDATES DICT FOR INLET AND OUTLET CONDITIONS.
@@ -546,6 +602,22 @@ class Channel:
     self.xCoord = x
     self.yCoord = y
 
+  # Get array of max conductor temperatures in the channel
+  def get_cond_max(self) -> np.ndarray[float]:
+    if len(self.conductors) > 0:
+      max_list = np.array([])
+      for conductor in self.conductors:
+        max_list = np.append(max_list, conductor.get_max_temp())
+      return max_list
+
+  # Get array of max conductor temperatures in the channel
+  def get_cond_min(self) -> np.ndarray[float]:
+    if len(self.conductors) > 0:
+      min_list = np.array([])
+      for conductor in self.conductors:
+        min_list = np.append(min_list, conductor.get_min_temp())
+      return min_list
+
   # SETS A FORM LOSS COEFF FOR THE INLET AND OUTLETS
   def set_form_loss_coeffs(self, inlet: float, outlet: float):
     """
@@ -566,6 +638,24 @@ class Channel:
       return self.tracer_kernels[tracer_name][2].get_integrated_source()
     except:
       raise Exception("Idk what happened - see Kernels.Kernels.ExplicitSource")
+
+  # Returns int(P''' dV)
+  def get_integrated_power(self) -> float:
+    return sum(self.heat_source * self.vol_vec)
+
+  def get_integrated_conductor_power(self) -> float:
+    if len(self.conductors) > 0:
+      power = 0.0
+      for cond in self.conductors:
+        power += cond.get_integrated_power()
+      return power
+    else:
+      return 0.0
+
+
+  # Sets the nusselt model for the channel
+  def set_nu_model(self, nu_model: NusseltModel):
+    self.nu_model = nu_model
 
   # EXPORTS CHANNEL TO A PICKLE FILE
   def dump_channel_to_pkl(self, filename: str):

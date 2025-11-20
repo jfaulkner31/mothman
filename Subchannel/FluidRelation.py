@@ -26,3 +26,5 @@ class FluidRelation:
       raise Exception("Desired prop not found!")
   def get_mu(self):
     return self.mu
+  def get_k(self):
+    return self.k

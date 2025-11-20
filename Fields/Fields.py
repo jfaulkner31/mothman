@@ -49,6 +49,10 @@ class ScalarField(Field):
 
     # get_gradient_at_faces() -> Computes gradient at faces.
 
+  def set_T(self, vals: np.ndarray | list):
+    for idx, val in enumerate(vals):
+      self.T[idx] = val
+
   def interpolate_to_faces(self, upper_bc, lower_bc):
     """
     - interpolates field from centroid to faces using Equation 9.5:

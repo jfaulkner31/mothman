@@ -3,6 +3,8 @@ from Fields.Fields import *
 from Kernels.Kernels import *
 import matplotlib.pyplot as plt
 from copy import deepcopy
+from Kernels.Linkers import FloatLinker, Linker
+
 
 class LumpedMaterialProperty:
   """
@@ -72,11 +74,48 @@ class LumpedMaterialProperty:
   def is_constant(self) -> bool:
     return self._is_constant
 
+
+
 class Conductor:
+  """
+  Conductor base class for all conductors.
+
+  Params
+  ======
+  A : float
+    wall area for heat transfer
+  wall_temp : float
+    temperature of the wall for conjugate heat transfer
+
+  Methods
+  =======
+  Methods for the default class should include any methods
+  that must be called by the subchannel application -> e.g.
+  all methods much have a get_wall_area() and get_wall_temp() method
+  for retrieving the wall area and wall temperature respectively.
+
+  solve() : method that performs the solution of the conductor
+  get_wall_area() : returns wall area for heat transfer
+  get_wall_temp() : returns wall temperature for heat transfer
+  """
+
   def __init__(self):
-    pass
+    self.A = None
+    self.wall_temp = None
+    self.power = None
   def solve(self):
     pass
+  def get_wall_area(self) -> float:
+    return self.A
+  def get_wall_temp(self) -> float:
+    return self.wall_temp
+  def get_max_temp(self) -> float:
+    raise Exception("No default get_max_temp implemented!")
+  def get_min_temp(self) -> float:
+    raise Exception("No default get_min_temp implemented!")
+  def get_integrated_power(self) -> float:
+    """method for getting integrated power int(P''' dV) -> float"""
+    raise Exception("No default method for getting integrated power!")
 
 class LumpedCapacitor(Conductor):
   """
@@ -107,19 +146,18 @@ class LumpedCapacitor(Conductor):
   =======
   dT/dt = P/m/C + h*A/m/C * (T_bulk - T)
   """
-  def __init__(self, mass: float, power: float, h: float, A: float, L: float,
+  def __init__(self, mass: float, power: float | Linker, h: float | Linker, A: float,
                C: float | LumpedMaterialProperty, thermal_cond: float | LumpedMaterialProperty,
                initial_T: float,
-               T_bulk: float,
+               T_bulk: float | Linker,
                epsilon: float):
-    self.mass = mass
-    self.power = power
-    self.h = h
-    self.A = A
-    self.C = C
-    self.thermal_cond = thermal_cond
-    self.L = L
-    self.T_bulk = T_bulk
+    self.mass = mass # mass in kg
+    self.power = power # Power in Watts
+    self.h = h # htc in W/m2-K
+    self.A = A # area in m2
+    self.C = C # specific heat
+    self.thermal_cond = thermal_cond # thermal cond
+    self.T_bulk = T_bulk # bulk temperature - use a Linker or a float
 
     self.T = initial_T
     self.T_old = self.T
@@ -134,10 +172,8 @@ class LumpedCapacitor(Conductor):
     self.T = k
     T_old  = k-1
     """
-    T_bulk = None
-    # Determine how we are getting the bulk temperature
-    if isinstance(self.T_bulk, float) | isinstance(self.T_bulk, int):
-      T_bulk = float(self.T_bulk)
+
+    T_bulk = self.T_bulk
 
     # If it is a lumped material property.
     if isinstance(self.C, LumpedMaterialProperty):
@@ -161,9 +197,12 @@ class LumpedCapacitor(Conductor):
         diff = np.abs(T_next - T_next_prev_guess)
         T_next_prev_guess = T_next
     else:
-      T_next = self.T_old + _dt * (
-        self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
-      )
+      # T_next = self.T_old + _dt * (
+      #   self.power / self.mass / C + self.h*self.A / self.mass / C * (T_bulk - self.T)
+      # )
+      bottom_term = 1/_dt + self.h*self.A / self.mass / C
+      top = self.power / self.mass / C + self.h*self.A / self.mass / C * T_bulk + self.T_old / _dt
+      T_next = top / bottom_term
 
     # Save old and new T
     #self.T_old = copy.deepcopy(self.T)
@@ -172,6 +211,7 @@ class LumpedCapacitor(Conductor):
   def update_old_to_most_recent(self):
     self.T_old = copy.deepcopy(self.T)
 
+  ### GETTERS
   def get_heat_flux(self):
     """
     Returns heat flux:
@@ -180,13 +220,25 @@ class LumpedCapacitor(Conductor):
     """
     return self.A * self.h * (self.T_bulk - self.T)
 
-  def set_power(self, power: float):
+  def get_wall_temp(self):
+    return self.T
+  def get_wall_area(self):
+    return self.A
+  def get_max_temp(self):
+    return self.T
+  def get_min_temp(self):
+    return self.T
+  def get_integrated_power(self) -> float:
+    return self.power
+
+  ### SETTERS
+  def set_power(self, power: float | Linker):
     self.power = power
 
-  def set_htc(self, h: float):
+  def set_htc(self, h: float | Linker):
     self.h = h
 
-  def set_T_bulk(self, T_bulk: float):
+  def set_T_bulk(self, T_bulk: float | Linker):
     self.T_bulk = T_bulk
 
   def set_fluid_vals(self, power: float, htc: float, T_bulk: float):
@@ -194,6 +246,7 @@ class LumpedCapacitor(Conductor):
     self.set_htc(htc=htc)
     self.set_T_bulk(T_bulk=T_bulk)
 
+  ### OTHER
   def update_thermal_props(self):
     """
     Updates/sets thermal_cond or C values if they are LumpedMaterialProperty
