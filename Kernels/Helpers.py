@@ -16,7 +16,7 @@ from Kernels.Linkers import Linker, FloatLinker
 """
 Helper function for setting integrated power of each.
 """
-def ChannelArraySetTotalPower(ch: Channel, cond_power: float, channel_power: float):
+def ChannelSetTotalPower(ch: Channel, cond_power: float, channel_power: float):
   """
   Scales total channel power and the conductor powers so that:
 
@@ -57,7 +57,7 @@ def ChannelArraySetTotalPower(ch: Channel, cond_power: float, channel_power: flo
       raise Exception("List option not yet implemented for power scaling!")
 
   # Next scale channel power
-  ch.heat_source *= fluid_ratio
+  ch.heat_source.T *= fluid_ratio
 
   # Get stuff new
   new_cond_power = ch.get_integrated_conductor_power()
@@ -71,6 +71,66 @@ def ChannelArraySetTotalPower(ch: Channel, cond_power: float, channel_power: flo
   print(f'Total new power = {total_power}')
   print(f'Conductor power fraction = {new_cond_power/total_power}')
   print(f'Channel power fraction = {new_ch_power/total_power}')
+
+def ChannelArraySetTotalPower(arr: ChannelArray, cond_power: float, channel_power: float) -> None:
+  """
+  Scales total channel power and the conductor powers so that:
+
+  int(P''' dV)_conductor = cond_power
+  int(P''' dV)_channel   = channel_power
+
+  Params
+  ======
+  channel : ChannelArray
+    The channel array
+  cond_power : float
+    conductor integrated power in Watts
+  channel_power : float
+    channel power we want to scale to.
+  """
+
+  # Get original powers
+  orig_ch_power =   arr.get_integrated_power()
+  orig_cond_power = arr.get_integrateds_conductor_power()
+
+  cond_ratio = cond_power / orig_cond_power
+  fluid_ratio = channel_power / orig_ch_power
+
+  # First scale the conductor powers
+  for ch in arr.channels:
+    for cond in ch.conductors:
+      if isinstance(cond.power, FloatLinker):
+        # Is a linker so we must keep it as a linker.
+        # Multiply linker multiplier by ratio of OLD to NEW
+        if cond.power.multiplier == 0:
+          raise Exception("Multiplier is == 0 -> exception!")
+        cond.power.multiplier *= cond_ratio / fluid_ratio
+
+      elif isinstance(cond.power, float):
+        # Is a float
+        cond.power *= cond_ratio / fluid_ratio
+
+      elif isinstance(cond.power, list):
+        raise Exception("List option not yet implemented for power scaling!")
+
+  # Next scale channel power
+  for ch in arr.channels:
+    ch.heat_source.T *= fluid_ratio
+
+  # Get stuff new
+  new_cond_power = arr.get_integrated_conductor_power()
+  new_ch_power   = arr.get_integrated_power()
+  total_power    = new_ch_power + new_cond_power
+  # Printing
+  print(f'Old conductor power = {orig_cond_power}')
+  print(f'New conductor power = {new_cond_power}')
+  print(f'Old channel power = {orig_ch_power}')
+  print(f'New channel power = {new_ch_power}')
+  print(f'Total new power = {total_power}')
+  print(f'Conductor power fraction = {new_cond_power/total_power}')
+  print(f'Channel power fraction = {new_ch_power/total_power}')
+
+
 
 
 """
@@ -148,7 +208,7 @@ def LinkConductorPowersToChannel(channel: Channel, multiplier: float):
   via a FloatLinker with a ratio chosen.
   """
   for idx, cond in enumerate(channel.conductors):
-    cond.set_power(FloatLinker(idx=idx, multiplier=multiplier, obj=channel.heat_source))
+    cond.set_power(FloatLinker(idx=idx, multiplier=multiplier, obj=channel.heat_source.T))
 
 def LinkConductorPowersToChannelArray(channelarray: ChannelArray, multiplier: float,
                                  ch_idx_DNI : list | np.ndarray) -> None:

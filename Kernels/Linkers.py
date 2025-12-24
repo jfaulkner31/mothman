@@ -66,3 +66,5 @@ class FloatLinker(Linker):
     return self._get_value() / other
   def __rtruediv__(self, other: float) -> float:
     return other / self._get_value()
+
+

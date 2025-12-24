@@ -113,9 +113,16 @@ class Conductor:
     raise Exception("No default get_max_temp implemented!")
   def get_min_temp(self) -> float:
     raise Exception("No default get_min_temp implemented!")
+  def get_mean_temp(self) -> float:
+    raise Exception("No default get_min_temp implemented!")
   def get_integrated_power(self) -> float:
     """method for getting integrated power int(P''' dV) -> float"""
     raise Exception("No default method for getting integrated power!")
+  def get_coupling_coeffs() -> tuple[np.ndarray, np.ndarray, float]:
+    raise Exception("No default method for getting coupling coeffs!")
+  def set_T(self, T: float | np.ndarray) -> None:
+    raise Exception("No default method for setting T!")
+
 
 class LumpedCapacitor(Conductor):
   """
@@ -164,6 +171,12 @@ class LumpedCapacitor(Conductor):
 
     self.epsilon = epsilon
 
+  def set_T(self, T: float):
+    """
+    Sets the value of Temperature (K)
+    """
+    self.T = T
+
   def solve(self, _dt: float):
     """
     Solves
@@ -208,6 +221,38 @@ class LumpedCapacitor(Conductor):
     #self.T_old = copy.deepcopy(self.T)
     self.T = T_next
 
+
+  def get_coupling_coeffs(self, _dt: float)->tuple[np.ndarray, np.ndarray, float]:
+    """
+    Basic function for doing a coupled
+    solve with a channel object.
+
+    Returns matrix H and vector B as objects
+
+    Returns coupling coefficient as float
+    where coupling coefficient is to be multiplied by T_bulk
+
+    Does not consider the heat flux term: HAT_b / MCp
+
+    H = 1/_deltaT + HA/MC -> matrix
+    B = P/MC + T_old/_deltaT -> vector
+    coeff = HA/MC -> float
+
+    """
+
+    # If it is a lumped material property.
+    if isinstance(self.C, LumpedMaterialProperty):
+      C = self.C.explicit_eval(self.T)
+    else:
+      C = self.C
+
+    H = np.array([1.0/_dt + self.h * self.A / self.mass / C])
+    B = np.array([self.power / self.mass / C + self.T_old / _dt])
+    coeff = self.h * self.A / self.mass / C * -1.0 # to be multiplied by T_bulk
+    return H, B, coeff
+
+
+
   def update_old_to_most_recent(self):
     self.T_old = copy.deepcopy(self.T)
 
@@ -227,6 +272,8 @@ class LumpedCapacitor(Conductor):
   def get_max_temp(self):
     return self.T
   def get_min_temp(self):
+    return self.T
+  def get_mean_temp(self):
     return self.T
   def get_integrated_power(self) -> float:
     return self.power

@@ -12,7 +12,7 @@ class Field:
 # General scalar field class (a field with a single scalar variable such as Temperature)
 class ScalarField(Field):
   """
-  Cell centered field at the element centroid - represented by .T
+  Cell centered field at the element centroid - represented by T
   """
   def __init__(self, name: str, initial_value: np.ndarray | float, mesh: Mesh_1D):
     #################################################
@@ -26,6 +26,8 @@ class ScalarField(Field):
         raise Exception("nz on variable input mesh must be the same as the length of the initial condition vector!")
     elif isinstance(initial_value, float):
       self.initial_value = np.ones(self.mesh.nz)*initial_value
+    elif isinstance(initial_value, int):
+      self.initial_value = np.ones(self.mesh.nz)*float(initial_value)
     else:
       raise Exception("Initial value must be of np.ndarray or float.")
     #################################################

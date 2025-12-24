@@ -1,3 +1,6 @@
+# Set threads before import numpy
+
+
 # NUMPY
 import numpy as np
 
@@ -12,6 +15,8 @@ from Kernels.Kernels import *
 from Solvers.Solvers import *
 from Kernels.LumpedCapacitor import Conductor
 from Kernels.NusseltModels import *
+from Subchannel.OutputText import Colors
+from HeatExchanger.HeatExchanger import HeatExchangerObject
 
 # MPL
 import matplotlib.pyplot as plt
@@ -22,6 +27,10 @@ from matplotlib.patches import Rectangle
 
 # PICKLE
 import pickle as pkl
+
+"""
+Channel class
+"""
 
 class Channel:
   def __init__(self, gravity: float,
@@ -79,10 +88,9 @@ class Channel:
     self.L1 = L1
     self.fluid = fluid
     self.fric = fric
-    self.set_heat_source(nZones=nZones, heat_source=heat_source)
     self.xCoord = None
     self.yCoord = None
-    self.conductors: list[Conductor] = None
+    self.conductors: list[Conductor] = []
 
     # Make a mesh
     coords = np.linspace(L0,L1,self.nZones+1)
@@ -99,13 +107,19 @@ class Channel:
     # Set boundary conditions
     self.set_bcs(pressure_bc=pressure_bc, T_bc=T_bc, mdot_bc=mdot_bc, tracer_name_value_pairs={}, tracer_bool=False, th_bool=True)
 
-    # Make some variables -> pressure, mdot, enthalpy, density, temperature, htc
+    # Make some variables -> pressure, mdot, enthalpy, density, temperature, htc, heat_source
     self.pressure = ScalarField(name='P', initial_value=self.pressure_bc, mesh=self.mesh)
     self.mdot = ScalarField(name='mdot', initial_value=self.mdot_bc, mesh=self.mesh)
     self.h = ScalarField(name='enthalpy', initial_value=self.T_bc, mesh=self.mesh)
     self.rho = ScalarField(name='density', initial_value=self.rho_bc, mesh=self.mesh)
     self.temp = ScalarField(name='temp', initial_value=self.T_bc, mesh=self.mesh)
     self.htc = ScalarField(name='htc', initial_value=-1, mesh=self.mesh)
+    self.heat_source = ScalarField(name='heat_source', initial_value=heat_source, mesh=self.mesh)
+
+    # Residuals
+    self.energy_residual: float = 1.0
+    self.energy_residual_abs: float = 1e-6
+    self.print_energy_residual: bool = True
 
     # Make a dictionary for those variables.
     self.pressure_dict = {}
@@ -156,6 +170,10 @@ class Channel:
     # Other
     self.nu_model: NusseltModel = BasicNusseltModel # Set as basic default -> requires manual setting by user.
 
+    # List of fields once we are done
+    self.fields: list[Field] = [
+      self.pressure, self.mdot, self.h, self.rho, self.temp, self.htc, self.heat_source]
+
   # SETUP A TRACER FOR THIS CHANNEL OBJECT
   def add_tracer_to_channel(self, name: str,
                  initial_value: np.ndarray | float,
@@ -187,6 +205,9 @@ class Channel:
 
     # Add BC's to the tracer:
     self.tracer_bcs[name] = [AdvectedInletFluxBC(field=self.tracers[name], mesh=self.mesh, boundary=boundary, phi=phi, w=self.velocity_faces, rho=rho)]
+
+    # Append tracer to the list of fields we have
+    self.fields.append(self.tracers[name])
 
   # SOLUTION FOR CHANNEL TRACERS
   def solve_tracer(self, name: str, _dt: float):
@@ -274,14 +295,22 @@ class Channel:
 
   # SETS HEAT SOURCE
   def set_heat_source(self, heat_source: float | list, nZones: int):
+
     # Quick function for setting heat source.
     if isinstance(heat_source, float):
-      self.heat_source = [heat_source]*nZones # float
-    else:
-      self.heat_source = heat_source # if heat source is a list
+      heat_source = [heat_source]*nZones # float
 
-    if len(self.heat_source) != self.nZones:
+    elif isinstance(heat_source, int):
+      heat_source = [float(heat_source)]*nZones # int -> float
+
+    else:
+      heat_source = heat_source # if heat source is a list
+
+    if len(heat_source) != self.nZones:
       raise Exception("Heat source is not the same length as the number of zones!!!")
+
+    # Update field value for heat source
+    self.heat_source.set_T(heat_source)
 
   # SET ANNULUS PARAMETERS
   def set_annulus_parameters(self, Rout: float, Rin: float):
@@ -335,7 +364,54 @@ class Channel:
       for tracer_name in tracer_name_value_pairs.keys():
         self.tracer_bcs[tracer_name][0].phi = tracer_name_value_pairs[tracer_name] # use index 0 since bcs is a list of bc's
 
-  # MASS EQUATION
+  """
+  Residuals
+  """
+  ### SET RESIDUAL INFORMATION
+  def set_residual_information(self, energy_abs: float, print_energy: bool):
+    self.energy_residual_abs = energy_abs
+    self.print_energy_residual = print_energy
+
+  # Printing residual values for an equation:
+  def _print_residual_iter(self, resid: float, abs_tol: float, iteration_num: int, final: bool, name: str):
+    """
+    Prints out residual iteration stuff
+    """
+
+    if final:
+      print(f"{name}: {Colors.GREEN}Solved with ITER = {iteration_num}{Colors.ENDC}\n")
+    else:
+      print(f"  {name}: {Colors.GREEN}RESID|{Colors.RED}ABS_TOL|{Colors.YELLOW}ITER -- " +
+        f"{Colors.GREEN}{resid}" +
+        f"|{Colors.RED}{abs_tol}"+
+        f"|{Colors.YELLOW}{iteration_num}{Colors.ENDC} ")
+
+  # Computing residuals
+  def _compute_residual(self, B: np.ndarray, A: np.ndarray, x: np.ndarray):
+    """
+    Returns computed residual using L1 norm of B-A@x
+
+    Parameters
+    ==========
+    B : np.ndarray
+      1D np vector
+    A : np.ndarray
+      2D matrix
+    x : np.ndarray
+      1D np vector
+    Returns
+    =======
+    normed : float
+      L1 norm of the residual vector
+    """
+    r = B - A @ x
+    normed = np.linalg.norm(r)
+    return normed
+
+
+  """
+  Mass equation
+  """
   def solve_mass_equation(self, _dt: float):
     """
     MASS EQUATION AND SETUP
@@ -360,17 +436,116 @@ class Channel:
     # SOLVE
     self.mdot.T = np.linalg.solve(self.A_mass, self.b_mass)
 
+  """
+  Energy equation related items
+  """
+
   # ENERGY EQUATION
   def solve_energy_equation(self, _dt: float):
     """
     ENERGY EQUATION AND SETUP
     """
-    mesh = self.mesh
+    # Setup A_ and b_energy internally
+    self._construct_energy_equation_matrix(_dt=_dt)
 
-    # Rester matrices
+    # Compute and write energy residual after constructing
+    self.energy_residual = self._compute_energy_equation_residual()
+
+    # SOLVE FOR ENTHALPY
+    self.h.T = np.linalg.solve(self.A_energy, self.b_energy)
+
+    # DO EOS NOW -> updates internal temperature values calling _solve_cond...()
+    _ = self.solve_EOS()
+
+    # Conductor solver
+    self._solve_conductors_energy(_dt=_dt)
+
+  def solve_energy_equation_coupled(self, _dt: float):
+    """
+    Solves coupled energy equation between
+    conductors and fluid.
+
+    Currently only works for lumped capacitors.
+    """
+
+    # If length is 0
+    if len(self.conductors) == 0:
+      self.solve_energy_equation(_dt=_dt)
+      return
+
+    # First we setup the energy equation matrix on main diagonal
+    self._construct_energy_equation_matrix(_dt=_dt)
+
+    # Then we get the energy equation on main diagonal for conductors
+    Hvec = [] # vector of matrices for each conductor.
+    Bcvec = np.array([])
+    coeff_vec = np.array([])
+    for this in self.conductors:
+      Hc, Bc, coeff_c = this.get_coupling_coeffs(_dt=_dt)
+      Hvec.append(Hc)
+      Bcvec = np.append(Bcvec, Bc)
+      coeff_vec = np.append(coeff_vec, coeff_c)
+
+    # Make block diagonal w/ arg unpacking
+    D = scipy.linalg.block_diag(self.A_energy, *Hvec)
+    B = np.append(self.b_energy, Bcvec)
+
+    # Upper right block (coupling to fluid)
+    UR = np.diag(coeff_vec)
+
+    # Lower left block (coupling to condudctors)
+    LL = np.diag(coeff_vec / self.fluid.cp)
+
+    # construct entire matrix
+    n, m = UR.shape[0], UR.shape[1]
+    D[:n, n:] = UR
+    D[n:, :n] = LL
+
+    # Compute energy residual after constructing
+    self.energy_residual = self._compute_residual(
+      B=B, A=D, x=np.append(self.h.T, np.array([cond.T for cond in self.conductors]))
+      )
+
+    # Solve
+    X = np.linalg.solve(D, B)
+
+    # Set enthalpy self:
+    self.h.set_T(X[:self.nZones])
+
+    # Set conductors T
+    for cid, cond in enumerate(self.conductors):
+      cond.set_T(X[self.nZones+cid])
+
+    # Update equation of state
+    _ = self.solve_EOS()
+
+    # Return
+    return
+
+  # Residual for energy equation
+  def _compute_energy_equation_residual(self) -> float:
+    """
+    Take current values of A and b for energy equation.
+    and get residual using current value of h
+
+    Returns
+    =======
+    normed : float
+      L1 norm of the residual vector
+    """
+    return self._compute_residual(B=self.b_energy, A=self.A_energy, x=self.h.T)
+
+  # Constructing energy equation matrices
+  def _construct_energy_equation_matrix(self, _dt: float):
+    """
+    Constructs the matrix and vector b for the fluid energy equation
+    Also considers heat sources from conductors.
+    """
+    # The mesh object
+    mesh = self.mesh
+    # Reset matrices
     self.A_energy *= 0.0
     self.b_energy *= 0.0
-
     for cid in mesh.cidList:
       # Geometry stuff
       area = ( mesh.cells[cid].upperArea + mesh.cells[cid].lowerArea ) / 2.0
@@ -379,7 +554,7 @@ class Channel:
       self.A_energy[cid,cid] = area/_dt * self.rho.T[cid] + 1.0/dz * self.mdot.T[cid]
 
       # Source term 1 (heat source in W/m3 --> times Volume ---> divided by dz ---> = linear heat rate)
-      self.b_energy[cid] += self.heat_source[cid] * area*dz / dz
+      self.b_energy[cid] += self.heat_source.T[cid] * area*dz / dz
 
       # Source term 2 heat flux from conductors
       self._do_conductors_heat_source(cid=cid, dz=dz)
@@ -393,21 +568,13 @@ class Channel:
       else:
         self.A_energy[cid,cid-1] = -1.0/dz * self.mdot.T[cid-1]
 
-    # SOLVE FOR ENTHALPY
-    self.h.T = np.linalg.solve(self.A_energy, self.b_energy)
-
-    # DO EOS NOW -> updates internal temperature values calling _solve_cond...()
-    self.solve_EOS()
-
-    # Conductor solver
-    self._solve_conductors_energy(_dt=_dt)
-
-
+  # Solve conductors energy equations
   def _solve_conductors_energy(self, _dt: float):
     if len(self.conductors) > 0:
       for conductor in self.conductors:
         conductor.solve(_dt=_dt)
 
+  # Consider heat flux from conductor as source
   def _do_conductors_heat_source(self, cid: int, dz: float):
     if len(self.conductors) > 0:
       # Nu = h*D/k
@@ -429,12 +596,32 @@ class Channel:
       # units on b are: W/m -> W/m2/K * m2 / m * K = W/m
       # units on the D term are kg/s/m * ENTHALPY = W/m2-K * m2 / m / J/kg-K = J/s-K-m * kg-K/J = kg/s/m
       # enthalpy / cp = temp.
-      the_b_term =        _the_htc * _wall_area / dz * _wall_temp
-      the_D_term =        _the_htc * _wall_area / dz / self.fluid.cp
+      the_b_term =        _the_htc * _wall_area / dz * _wall_temp    # conductor temperature source hA/dz * Twall
+      the_D_term =        _the_htc * _wall_area / dz / self.fluid.cp # h = cp*T so Tnew = h/cp
       self.A_energy[cid,cid] += the_D_term
       self.b_energy[cid] += the_b_term
 
-  # PRESSURE EQUATION
+  # EQUATION OF STATE FOR TEMPERATURE AND DENSITY
+  def solve_EOS(self):
+    # New temp and density arrays
+    temp_updated = np.array([])
+    rho_updated = np.array([])
+    for cid in self.mesh.cidList:
+      t_new = self.fluid.props_from_P_H(P=self.pressure.T[cid], enthalpy=self.h.T[cid], prop='T')
+      temp_updated = np.append(temp_updated, t_new)
+      rho_updated = np.append(rho_updated, self.fluid.props_from_P_H(P=self.pressure.T[cid], enthalpy=self.h.T[cid], prop='rho') )
+
+    max_diff = np.max(np.abs(self.temp.T - temp_updated))
+
+    # Now update the values in temp and rho
+    self.temp.set_T(temp_updated)
+    self.rho.set_T(rho_updated)
+
+    return max_diff
+
+  """
+  Pressure equation
+  """
   def solve_pressure_equation(self, _dt: float):
     """
     MOMENTUM EQUATION AND SETUP
@@ -472,24 +659,6 @@ class Channel:
             dz / _dt * (self.mdot.T[cid] - self.mdot.T_old[cid]) )
     self.pressure.T = np.linalg.solve(self.A_momentum, self.b_momentum)
 
-  # EQUATION OF STATE FOR TEMPERATURE AND DENSITY
-  def solve_EOS(self):
-    # New temp and density arrays
-    temp_updated = np.array([])
-    rho_updated = np.array([])
-    for cid in self.mesh.cidList:
-      t_new = self.fluid.props_from_P_H(P=self.pressure.T[cid], enthalpy=self.h.T[cid], prop='T')
-      temp_updated = np.append(temp_updated, t_new)
-      rho_updated = np.append(rho_updated, self.fluid.props_from_P_H(P=self.pressure.T[cid], enthalpy=self.h.T[cid], prop='rho') )
-
-    max_diff = np.max(np.abs(self.temp.T - temp_updated))
-
-    # Now update the values in temp and rho
-    self.temp.set_T(temp_updated)
-    self.rho.set_T(rho_updated)
-
-    return max_diff
-
   # UPDATES DICT FOR INLET AND OUTLET CONDITIONS.
   def update_channel_conditions_TH(self):
     """
@@ -507,10 +676,17 @@ class Channel:
 
   # THERMAL HYDRAULICS SOLVING LOOP
   def solve_channel_TH(self, _dt: float):
+
     # Start loop
+    self.energy_residual = 1e7
     iteration_num = 0
-    max_diff = 1e10
-    while max_diff > self.temp_tolerance:
+
+    # Print
+    if self.print_energy_residual:
+      print(f"Now solving energy equation with dt = {_dt} ...")
+
+    ####
+    while self.energy_residual > self.energy_residual_abs:
 
       # Handle iteration limit
       iteration_num += 1
@@ -519,9 +695,19 @@ class Channel:
 
       # Solve equations
       self.solve_mass_equation(_dt=_dt) # solves and updates mass flow rates
-      self.solve_energy_equation(_dt=_dt) # solves and updates enthalpy
+      self.solve_energy_equation_coupled(_dt=_dt) # solves and updates enthalpy
       self.solve_pressure_equation(_dt=_dt) # solves and updates pressures
-      max_diff = self.solve_EOS() # solves and updates temperature and density - returns maximum temp diff.
+      _ = self.solve_EOS() # solves and updates temperature and density
+
+      if self.print_energy_residual:
+        self._print_residual_iter(self.energy_residual, self.energy_residual_abs, iteration_num, False, "Enrg.")
+
+    ####
+
+    # Printing residuals
+    if self.print_energy_residual:
+      self._print_residual_iter(self.energy_residual, self.energy_residual_abs, iteration_num, True, "Enrg.")
+
 
     # Print?
     # print("Channel solved after", iteration_num, "iterations!")
@@ -641,7 +827,7 @@ class Channel:
 
   # Returns int(P''' dV)
   def get_integrated_power(self) -> float:
-    return sum(self.heat_source * self.vol_vec)
+    return sum(self.heat_source.T * self.vol_vec)
 
   def get_integrated_conductor_power(self) -> float:
     if len(self.conductors) > 0:
@@ -674,6 +860,10 @@ class Channel:
     """
     with open(filename, 'rb') as handle:
       return pkl.load(handle)
+
+"""
+ChannelArray class
+"""
 
 class ChannelArray:
   """
@@ -725,6 +915,23 @@ class ChannelArray:
     self.epsilon = epsilon # how tight mdots are converged
     self.dp_by_channel_PREVIOUS = np.zeros(len(self.channels)) # pressures from previous mdot iteration
     self.max_channel_mdot_diff = 1.0
+
+  ### Resetting solve -> useful for starting a new simulation when old data is from a pkl file
+  def reset_solve(self):
+    """
+    Resets some values, useful, if not required, when starting a new simulation
+    after obtaining a ChannelArray from a pickle file.
+    """
+    self.mdot_iteration_number = -1
+    self.mdot_by_channel_PREVIOUS = None
+    self.dp_by_channel_PREVIOUS = np.zeros(len(self.channels))
+    self.max_channel_mdot_diff = 1.0
+
+  ### SET RESIDUAL INFORMATION
+  def set_residual_information(self,
+      energy: float, energy_abs: float, print_energy: bool):
+    for ch in self.channels:
+      ch.set_residual_information(energy_abs=energy_abs, print_energy=print_energy)
 
   ### NECESSARY FOR PASSING / SETTING DATA
   def set_bcs(self, pressure_bc: float, T_bc: float, mdot_bc: float, tracer_name_value_pairs: dict, tracer_bool: bool, th_bool: bool):
@@ -800,11 +1007,24 @@ class ChannelArray:
 
     return specific_enthalpy, outlet_P, outlet_T, mdot_sum, tracer_weighted_value
 
+
+
   # SOLVING TH
-  def solve_channel_TH(self, _dt: float):
+  def solve_channel_TH(self, _dt: float, N: int):
     """
     Solves thermal hydraulics for each channel in the array.
     """
+
+    """
+    Spawn MPI
+    """
+    from mpi4py import MPI
+    print(f"Running MPI: ntasks = {MPI.COMM_WORLD.Get_size()}")
+    __MPI_COMM = MPI.COMM_WORLD
+    __MPI_RANK = __MPI_COMM.Get_rank()
+    __MPI_SIZE = __MPI_COMM.Get_size()
+
+
     ### PRESSURE COUPLED CHANNEL ARRAY ###
     if self.coupling_method == 'pressure_method':
       print("Now converging channel arrays ...")
@@ -814,8 +1034,36 @@ class ChannelArray:
         iter_num += 1
         self.update_mdots()
         print("\tIteration number", iter_num, "... Rel. Diff. Before iterating =", self.max_channel_mdot_diff)
-        for ch in self.channels:
+
+        # """
+        # MPI
+        #   __MPI_COMM = MPI.COMM_WORLD
+        #   __MPI_RANK = __MPI_COMM.Get_rank()
+        #   __MPI_SIZE = __MPI_COMM.Get_size()
+        # """
+
+        # channels_per_rank = len(self.channels) // __MPI_SIZE
+        # start = __MPI_RANK * channels_per_rank
+        # end = (__MPI_RANK + 1) * channels_per_rank if __MPI_RANK < __MPI_SIZE - 1 else len(self.channels)
+        # local_channels = self.channels[start:end]
+        # for ch in local_channels:
+        #   ch.solve_channel_TH(_dt=_dt)
+        # all_channels = __MPI_COMM.gather(local_channels, root=0)
+
+        # # Flatten
+        # if __MPI_RANK == 0:
+        #   self.channels = [ch for sublist in all_channels for ch in sublist]
+
+        # # Broadcast
+        # self.channels = __MPI_COMM.bcast(self.channels if __MPI_RANK == 0 else None, root=0)
+
+        """
+        Normal
+        """
+        for ch_idx, ch in enumerate(self.channels):
           ch.solve_channel_TH(_dt=_dt)
+
+
       print("\tSolved channel coupling")
       self.max_channel_mdot_diff = 1.0 # reset after solving!
 
@@ -826,6 +1074,7 @@ class ChannelArray:
         ch.solve_channel_TH(_dt=_dt)
     else:
       raise Exception("Method not yet added for solve_channel_TH()")
+
 
   ### TRACERS
   def solve_tracer(self, name: str, _dt: float):
@@ -1304,6 +1553,18 @@ class ChannelArray:
 
     return out
 
+  def get_integrated_power(self) -> float:
+    p = 0.0
+    for ch in self.channels:
+      p += ch.get_integrated_power()
+    return p
+
+  def get_integrated_conductor_power(self) -> float:
+    p = 0.0
+    for ch in self.channels:
+      p += ch.get_integrated_conductor_power()
+    return p
+
 
   ### EXPORTS CHANNEL TO A PICKLE FILE
   def dump_channel_to_pkl(self, filename: str):
@@ -1330,9 +1591,9 @@ class ChannelArray:
 
 
 
-######################
-# Channel interfaces #
-######################
+"""
+ChannelInterface class
+"""
 
 class ChannelInterface:
   """
@@ -1349,10 +1610,11 @@ class ChannelInterface:
 
   ChannelInterface.update_interface_conditions() can be used to call the pass between the channels.
   """
-  def __init__(self, ch1, ch2):
+  def __init__(self, ch1: Channel | ChannelArray,
+                     ch2: Channel | ChannelArray):
     # Channels
-    self.ch1 = ch1
-    self.ch2 = ch2
+    self.ch1: Channel | ChannelArray = ch1
+    self.ch2: Channel | ChannelArray = ch2
 
   def update_interface_conditions(self, tracer_bool: bool, th_bool: bool):
     """
@@ -1379,3 +1641,83 @@ class ChannelInterface:
                        tracer_bool=tracer_bool, th_bool=th_bool)
     else:
       raise Exception("Unknown interface type")
+
+# TODO for all need to implement DNP's via timedelays.
+
+"""
+Channel interface for a channel to a hot side of a HX
+"""
+class ChannelInterfaceToHotInlet(ChannelInterface):
+  """
+  Attaches channel to hot-side inlet of a heat exchanger.
+  """
+  def __init__(self, ch1: Channel | HeatExchangerObject,
+                     ch2: Channel | HeatExchangerObject):
+
+    # Channels
+    self.ch1: Channel | HeatExchangerObject = ch1
+    self.ch2: Channel | HeatExchangerObject = ch2
+
+    # Hot bc method
+    self.set_bc_method_name = "set_hot_bc"
+
+  def update_interface_conditions(self):
+    # Channel to heat exchanger
+    if isinstance(self.ch1, Channel) & isinstance(self.ch2, HeatExchangerObject):
+      # Set
+      set_method = getattr(self.ch2, self.set_bc_method_name)
+      cond1 = self.ch1.channel_conditions
+      self.ch2.set_method(cond1["T_out"], cond1['mdot_out'], cond1['P_out'])
+    # Heat exchanger to channel
+    elif isinstance(self.ch1, HeatExchangerObject) & isinstance(self.ch2, Channel):
+      # Set
+      set_method = getattr(self.ch1, self.set_bc_method_name)
+      cond2 = self.ch2.channel_conditions
+      self.ch1.set_method(cond2["T_out"], cond2['mdot_out'], cond2['P_out'])
+    else:
+      raise Exception("Unknown interface type")
+
+"""
+Channel interface for a channel to a cold side of a HX
+"""
+class ChannelInterfaceToColdInlet(ChannelInterfaceToHotInlet):
+  """
+  Attaches channel to cold-side inlet of a heat exchanger.
+  """
+  def __init__(self, ch1, ch2):
+    super().__init__(ch1, ch2)
+    self.set_bc_method_name = "set_cold_bc"
+  def update_interface_conditions(self):
+    return super().update_interface_conditions()
+
+"""
+Channel interface for a hot side of HX to a channel
+"""
+class ChannelInterfaceToHotOutlet(ChannelInterface):
+  """
+  Attaches channel to hot-side outlet of a heat exchanger.
+  """
+  def __init__(self, ch1: Channel | HeatExchangerObject,
+                     ch2: Channel | HeatExchangerObject):
+    self.ch1: Channel | HeatExchangerObject = ch1
+    self.ch2: Channel | HeatExchangerObject = ch2
+  def update_interface_conditions(self):
+
+    # ch1 is heat exchanger
+    if isinstance(self.ch1, HeatExchangerObject) & isinstance(self.ch2, Channel):
+      # need to implement DNP's
+      pass
+
+    # Ch2 is a heat exchanger
+    elif isinstance(self.ch2, HeatExchangerObject) & isinstance(self.ch1, Channel):
+      pass
+    else:
+      raise Exception("Unknown interface type")
+
+
+
+
+
+"""
+Channel interface for a cold side of a HX to a channel
+"""
