@@ -15,8 +15,9 @@ from Kernels.Kernels import *
 from Solvers.Solvers import *
 from Kernels.LumpedCapacitor import Conductor
 from Kernels.NusseltModels import *
+from Kernels.TimeDelayTracker import *
 from Subchannel.OutputText import Colors
-from HeatExchanger.HeatExchanger import HeatExchangerObject
+from HeatExchanger.HX import HeatExchangerObject
 
 # MPL
 import matplotlib.pyplot as plt
@@ -1645,6 +1646,16 @@ class ChannelInterface:
 # TODO for all need to implement DNP's via timedelays.
 
 """
+Heat Exchanger interfaces for the following situations:
+Channel -> HotInlet
+Channel-> ColdInlet
+HotOutlet -> Channel
+ColdOutlet -> Channel
+
+Handles DNP's via time delays packed within the HeatExchanger object
+"""
+
+"""
 Channel interface for a channel to a hot side of a HX
 """
 class ChannelInterfaceToHotInlet(ChannelInterface):
@@ -1660,20 +1671,32 @@ class ChannelInterfaceToHotInlet(ChannelInterface):
 
     # Hot bc method
     self.set_bc_method_name = "set_hot_bc"
+    self.set_tracer_method_name = "set_tracer_hot_bc"
 
-  def update_interface_conditions(self):
-    # Channel to heat exchanger
+  def update_interface_conditions(self, th_bool: bool, tracer_bool: bool, current_time: float):
+    # Ch 1 is channel object
     if isinstance(self.ch1, Channel) & isinstance(self.ch2, HeatExchangerObject):
-      # Set
-      set_method = getattr(self.ch2, self.set_bc_method_name)
-      cond1 = self.ch1.channel_conditions
-      self.ch2.set_method(cond1["T_out"], cond1['mdot_out'], cond1['P_out'])
-    # Heat exchanger to channel
+      # Set th and tracers
+      if th_bool:
+        set_method = getattr(self.ch2, self.set_bc_method_name)
+        cond1 = self.ch1.channel_conditions
+        self.ch2.set_method(cond1["T_out"], cond1['mdot_out'], cond1['P_out'])
+      if tracer_bool:
+        tracer_method = getattr(self.ch2, self.set_tracer_method_name)
+        cond1 = self.ch1.channel_conditions
+        self.ch2.tracer_method(current_time=current_time, tracer_name_value_pairs=cond1['tracers_out'])
+
+    # Ch2 is channel object
     elif isinstance(self.ch1, HeatExchangerObject) & isinstance(self.ch2, Channel):
       # Set
-      set_method = getattr(self.ch1, self.set_bc_method_name)
-      cond2 = self.ch2.channel_conditions
+      if th_bool:
+        set_method = getattr(self.ch1, self.set_bc_method_name)
+        cond2 = self.ch2.channel_conditions
       self.ch1.set_method(cond2["T_out"], cond2['mdot_out'], cond2['P_out'])
+      if tracer_bool:
+        tracer_method = getattr(self.ch1, self.set_tracer_method_name)
+        cond1 = self.ch2.channel_conditions
+        self.ch1.tracer_method(current_time=current_time, tracer_name_value_pairs=cond1['tracers_out'])
     else:
       raise Exception("Unknown interface type")
 
@@ -1687,8 +1710,9 @@ class ChannelInterfaceToColdInlet(ChannelInterfaceToHotInlet):
   def __init__(self, ch1, ch2):
     super().__init__(ch1, ch2)
     self.set_bc_method_name = "set_cold_bc"
-  def update_interface_conditions(self):
-    return super().update_interface_conditions()
+    self.set_tracer_method_name = "set_tracer_cold_bc"
+  def update_interface_conditions(self, th_bool: bool, tracer_bool: bool, current_time: float):
+    super().update_interface_conditions(th_bool=th_bool, tracer_bool=tracer_bool, current_time=current_time)
 
 """
 Channel interface for a hot side of HX to a channel
@@ -1701,23 +1725,38 @@ class ChannelInterfaceToHotOutlet(ChannelInterface):
                      ch2: Channel | HeatExchangerObject):
     self.ch1: Channel | HeatExchangerObject = ch1
     self.ch2: Channel | HeatExchangerObject = ch2
-  def update_interface_conditions(self):
+    self.method_name = "get_hot_outlet_conds"
+
+  def update_interface_conditions(self, th_bool: bool, tracer_bool: bool, current_time: float):
 
     # ch1 is heat exchanger
     if isinstance(self.ch1, HeatExchangerObject) & isinstance(self.ch2, Channel):
-      # need to implement DNP's
-      pass
+      get_method = getattr(self.ch1, self.method_name)
+      p, md, T = self.ch1.get_method()
+      self.ch2.set_bcs(pressure_bc=p, T_bc=T, mdot_bc=md, tracer_name_value_pairs=self.ch1.get_hot_tracer_all(time=current_time),
+                       tracer_bool=tracer_bool, th_bool=th_bool)
 
     # Ch2 is a heat exchanger
     elif isinstance(self.ch2, HeatExchangerObject) & isinstance(self.ch1, Channel):
-      pass
+      get_method = getattr(self.ch2, self.method_name)
+      p, md, T = self.ch2.get_method()
+      self.ch1.set_bcs(pressure_bc=p, T_bc=T, mdot_bc=md, tracer_name_value_pairs=self.ch2.get_hot_tracer_all(time=current_time),
+                       tracer_bool=tracer_bool, th_bool=th_bool)
     else:
       raise Exception("Unknown interface type")
-
-
-
-
 
 """
 Channel interface for a cold side of a HX to a channel
 """
+class ChannelInterfaceToColdOutlet(ChannelInterfaceToHotOutlet):
+  """
+  Attaches channel to cold-side outlet of a heat exchanger.
+  """
+  def __init__(self, ch1: Channel | HeatExchangerObject,
+                     ch2: Channel | HeatExchangerObject):
+    super().__init__(ch1=ch1, ch2=ch2)
+    # override method name for getting cold and hot outlet conds
+    self.method_name = "get_cold_outlet_conds"
+
+  def update_interface_conditions(self, th_bool: bool, tracer_bool: bool, current_time: float):
+    super().update_interface_conditions(th_bool=th_bool, tracer_bool=tracer_bool, current_time=current_time)
